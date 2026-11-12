@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { parseBankMessage } from '../server/parser.js';
 import { Variz, VarizDevice, VarizError, verifyWebhook, signWebhook } from '../sdk/src/index.js';
+import { detectBank } from '../server/bankDetect.js';
 
 const PORT = 3987;
 const HOOK_PORT = 3988;
@@ -128,7 +129,7 @@ try {
   d = (await dev0({ type: 'sms', sender: 'AnyBank', body: 'کد تایید 55555' })).json;
   assert.deepEqual([d.accepted, d.reason], [false, 'not_a_deposit']);
   // adding a sender switches SMS to strict mode
-  await call('POST', '/api/dash/sources', { type: 'sms', value: 'Bank Mellat' });
+  await call('POST', '/api/dash/sources', { type: 'sms', value: '98200030' });
   d = (await dev0({ type: 'sms', sender: 'AnyBank', body: 'واریز 123,459' })).json;
   assert.deepEqual([d.accepted, d.reason], [false, 'source_not_allowed']);
   ok('sources: both on by default, mobile senders rejected, optional strict list');
@@ -139,7 +140,7 @@ try {
   const dev = (m, p, b) => call(m, '/api/device' + p, b, { authorization: 'Bearer ' + devToken, cookie: '' });
   assert.equal((await call('POST', '/api/v1/transactions', { amount: 500000 }, { authorization: 'Bearer nope' })).status, 401);
   const cfg = (await dev('GET', '/config')).json;
-  assert.deepEqual(cfg.sms_senders, ['Bank Mellat']);
+  assert.deepEqual(cfg.sms_senders, ['98200030']);
   ok('device pairing, sources, API key');
 
   // app sign-in pairs a device without a token
@@ -198,12 +199,12 @@ try {
   const sms = (amount) => `حساب 1234567\nواریز ${amount.toLocaleString('en-US')}\nمانده 99,000,000`;
   r = await dev('POST', '/ingest', { type: 'sms', sender: '+989350000000', body: sms(t2.amount) });
   assert.equal(r.json.accepted, false);
-  r = await dev('POST', '/ingest', { type: 'sms', sender: 'Bank Mellat', body: `برداشت ${t2.amount}\nمانده 1` });
+  r = await dev('POST', '/ingest', { type: 'sms', sender: '98200030', body: `برداشت ${t2.amount}\nمانده 1` });
   assert.equal(r.json.matched, false);
-  r = await dev('POST', '/ingest', { type: 'sms', sender: 'bank mellat', body: sms(t2.amount), received_at: 1 });
+  r = await dev('POST', '/ingest', { type: 'sms', sender: '98200030', body: sms(t2.amount), received_at: 1 });
   assert.equal(r.json.matched, true);
   assert.equal(r.json.transaction_id, t2.id);
-  r = await dev('POST', '/ingest', { type: 'sms', sender: 'bank mellat', body: sms(t2.amount), received_at: 1 });
+  r = await dev('POST', '/ingest', { type: 'sms', sender: '98200030', body: sms(t2.amount), received_at: 1 });
   assert.equal(r.json.duplicate, true);
   assert.equal((await api('GET', '/transactions/' + t2.id)).json.status, 'paid');
   assert.equal((await api('GET', '/transactions/' + t1.id)).json.status, 'pending');
@@ -237,7 +238,7 @@ try {
   const sdkPair = (await call('POST', '/api/dash/pairing', {})).json;
   const { device: sdkDev } = await VarizDevice.pair({ code: sdkPair.url.replace(/^https?:\/\/[^/]+/, BASE), deviceName: 'sdk' });
   const waiting = variz.transactions.waitForPayment(s1.id, { interval: 200 });
-  const ing = await sdkDev.ingest({ sender: 'Bank Mellat', body: `واریز ${s1.amount.toLocaleString('en-US')}\nمانده 1`, received_at: 42 });
+  const ing = await sdkDev.ingest({ sender: '98200030', body: `واریز ${s1.amount.toLocaleString('en-US')}\nمانده 1`, received_at: 42 });
   assert.equal(ing.transaction_id, s1.id);
   assert.equal((await waiting).status, 'paid');
   // webhook verification
@@ -249,6 +250,7 @@ try {
   assert.equal((await verifyWebhook(Buffer.from('{"x":1}'), await signWebhook('{"x":1}', 's'), 's')).x, 1);
   await sdkDev.logout();
   ok('SDK: create/get/list/cards, errors, VarizDevice pair+ingest, waitForPayment, verifyWebhook');
+
 
   // daily ceiling: card B has a 5M limit, card A 100M
   r = await api('POST', '/transactions', { amount: 6_000_000, card_id: cardB.id });
@@ -274,12 +276,63 @@ try {
   const t4 = (await api('POST', '/transactions', { amount: 700_000, ttl: 1 })).json;
   await waitFor(async () => (await api('GET', '/transactions/' + t4.id)).json.status === 'expired', 8000);
   await waitFor(() => hooks.find((h) => h.headers['x-paychi-event'] === 'transaction.expired' && JSON.parse(h.body).data.id === t4.id));
-  r = await dev('POST', '/ingest', { type: 'sms', sender: 'Bank Mellat', body: sms(t4.amount) });
+  r = await dev('POST', '/ingest', { type: 'sms', sender: '98200030', body: sms(t4.amount) });
   assert.equal(r.json.matched, false);
   const t5 = (await api('POST', '/transactions', { amount: 700_000 })).json;
   assert.notEqual(t5.amount, t4.amount); // cooldown: a just-expired amount is not reused
   ok('expiry: status, webhook, late SMS not matched, amount cooldown');
 
+  // ---- bank / card identification (SMS and notifications)
+  for (const [s, b, want] of [
+    ['Bank Mellat', 'واریز 1,000', 'mellat'],
+    ['3000', '*بانك سامان*\nواريز ۲۵۰٬۰۰۳', 'saman'],
+    ['x', 'بانک توسعه صادرات\nواریز 100,000', 'tosee_saderat'],
+    ['x', 'بانک ملت\nواریز پایا از بانک ملی 1,000,000', 'mellat'],
+    ['x', 'واریز پایا از بانک ملی به حساب شما 1,000,000', null],
+    ['x', 'خرید از فروشگاه شهر کتاب', null],
+    ['com.x', 'همراه بانک پاسارگاد\nواریز 1,000,000', 'pasargad'],
+  ]) assert.equal(detectBank(s, b), want, b);
+  // free SMS from any sender again (the strict list above only allows 98200030)
+  for (const s of (await call('GET', '/api/dash/sources')).json.sources) await call('DELETE', '/api/dash/sources/' + s.id, {});
+  const mk = async (amount, card) => (await api('POST', '/transactions', { amount, card_id: card.id })).json;
+  const send = async (b) => (await dev('POST', '/ingest', b)).json;
+  // money reported on Saman, transaction was for the Mellat card → not auto-confirmed
+  const bm = await mk(300_000, cardA);
+  d = await send({ type: 'sms', sender: '30001', body: `بانک سامان\nواریز ${bm.amount.toLocaleString('en-US')}` });
+  assert.deepEqual([d.matched, d.reason, d.bank, d.transaction_id], [false, 'bank_mismatch', 'saman', bm.id]);
+  const evs = (await call('GET', '/api/dash/events')).json.events;
+  const mismatch = evs.find((e) => e.result === 'bank_mismatch');
+  assert.equal(mismatch.bank_name, 'بانک سامان');
+  const confirmed = (await call('POST', `/api/dash/events/${mismatch.id}/confirm`, {})).json;
+  assert.equal(confirmed.status, 'paid'); // confirmed by hand
+  // right bank → matched, and the sender's bank is remembered for messages without a bank name
+  const bm2 = await mk(310_000, cardA);
+  d = await send({ type: 'sms', sender: '30002', body: `بانک ملت\nواریز ${bm2.amount.toLocaleString('en-US')}` });
+  assert.deepEqual([d.matched, d.bank], [true, 'mellat']);
+  const bm3 = await mk(320_000, cardA);
+  d = await send({ type: 'sms', sender: '30002', body: `واریز ${bm3.amount.toLocaleString('en-US')}` });
+  assert.deepEqual([d.matched, d.bank], [true, 'mellat']);
+  const learned = (await call('GET', '/api/dash/sender-banks')).json.sender_banks;
+  assert.ok(learned.some((x) => x.sender === '30002' && x.bank_code === 'mellat' && x.auto));
+  // the text names another of your cards → card_mismatch
+  const bs = await mk(100_000, cardB);
+  d = await send({ type: 'sms', sender: '30009', body: `واریز ${bs.amount.toLocaleString('en-US')} به کارت ****${cardA.number.slice(-4)}` });
+  assert.deepEqual([d.matched, d.reason, d.card_id], [false, 'card_mismatch', cardA.id]);
+  // bank app notification: bank from the title, remembered for the package
+  const bs2 = await mk(150_000, cardB);
+  d = await send({ type: 'notification', sender: 'com.example.saman', body: `همراه بانک سامان\nواریز ${bs2.amount.toLocaleString('en-US')} ریال` });
+  assert.deepEqual([d.matched, d.bank], [true, 'saman']);
+  assert.ok((await call('GET', '/api/dash/sender-banks')).json.sender_banks.some((x) => x.type === 'notification' && x.bank_code === 'saman'));
+  // account number on a card identifies it
+  await call('PATCH', '/api/dash/cards/' + cardB.id, { account_number: '0101234567' });
+  const bs3 = await mk(120_000, cardB);
+  d = await send({ type: 'sms', sender: '30010', body: `واریز ${bs3.amount.toLocaleString('en-US')} به حساب 0101234567` });
+  assert.deepEqual([d.matched, d.card_id], [true, cardB.id]);
+  // manual mapping overrides the learned one
+  await call('POST', '/api/dash/sender-banks', { type: 'sms', sender: '30002', bank_code: 'saman' });
+  const over = (await call('GET', '/api/dash/sender-banks')).json.sender_banks.find((x) => x.sender === '30002');
+  assert.deepEqual([over.bank_code, over.auto], ['saman', false]);
+  ok('bank/card identification: SMS + notifications, mismatch held back, manual confirm, learned + manual sender banks, account number');
   console.log(`\nAll ${passed} checks passed.`);
 } catch (e) {
   console.error('\nFAILED:', e);

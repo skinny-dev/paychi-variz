@@ -131,6 +131,23 @@ CREATE TABLE IF NOT EXISTS pairing_codes (
 // Migrations for databases created by earlier versions.
 const hasColumn = (table, col) => db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col);
 if (!hasColumn('devices', 'install_id')) db.exec('ALTER TABLE devices ADD COLUMN install_id TEXT');
+// Bank / card identification of incoming messages.
+if (!hasColumn('cards', 'account_number')) db.exec('ALTER TABLE cards ADD COLUMN account_number TEXT');
+if (!hasColumn('events', 'bank_code')) db.exec('ALTER TABLE events ADD COLUMN bank_code TEXT');
+if (!hasColumn('events', 'card_id')) db.exec('ALTER TABLE events ADD COLUMN card_id INTEGER');
+if (!hasColumn('events', 'result')) db.exec('ALTER TABLE events ADD COLUMN result TEXT');
+db.exec(`
+CREATE TABLE IF NOT EXISTS sender_banks (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK (type IN ('sms', 'notification')),
+  sender TEXT NOT NULL,            -- SMS sender id or app package name, lower-cased
+  bank_code TEXT NOT NULL,
+  auto INTEGER NOT NULL DEFAULT 1, -- 1 = learned from a message, 0 = set by the user
+  created_at INTEGER NOT NULL,
+  UNIQUE (user_id, type, sender)
+);
+`);
 
 const cache = new Map();
 /** Cached prepared statement. */

@@ -4,6 +4,7 @@ import { q, tx } from '../db.js';
 import { bankInfo } from '../banks.js';
 import { requireSubscription } from '../auth.js';
 import { normalizeDigits, parseBankMessage } from '../parser.js';
+import { detectBank, identifyCard } from '../bankDetect.js';
 import { ApiError, httpUrl, iso, positiveInt, sha256, tehranDayStart } from '../util.js';
 import { enqueueWebhook } from './webhooks.js';
 
@@ -35,6 +36,7 @@ export function publicCard(card, user) {
     bank: bank.code,
     bank_name: bank.name,
     holder_name: card.holder_name,
+    account_number: card.account_number ?? null,
     active: !!card.active,
     daily_limit: limit,
     daily_limit_is_custom: card.daily_limit != null,
@@ -221,18 +223,81 @@ export function ingestMessage(user, device, input = {}) {
     ).run(user.id, device?.id ?? null, type, sender, body, parsed.amount, parsed.isDeposit ? 1 : 0, dedupe, now);
     if (!ins.changes) return { accepted: true, duplicate: true, matched: false };
     const eventId = Number(ins.lastInsertRowid);
-    if (!parsed.isDeposit) return { accepted: true, matched: false, reason: 'not_a_deposit' };
+    const { bank, cardId } = identifyMessage(user.id, type, sender, body);
+    const finish = (result) => {
+      q('UPDATE events SET bank_code = ?, card_id = ?, result = ? WHERE id = ?')
+        .run(bank, cardId, result.reason ?? 'matched', eventId);
+      return { accepted: true, ...result, bank, card_id: cardId };
+    };
+    if (!parsed.isDeposit) return finish({ matched: false, reason: 'not_a_deposit' });
 
     const t = q(
       `SELECT * FROM transactions WHERE user_id = ? AND status = 'pending' AND amount = ? ORDER BY created_at LIMIT 1`,
     ).get(user.id, parsed.amount);
-    if (!t) return { accepted: true, matched: false, amount: parsed.amount, reason: 'no_pending_transaction' };
+    if (!t) return finish({ matched: false, amount: parsed.amount, reason: 'no_pending_transaction' });
 
-    q(`UPDATE transactions SET status = 'paid', paid_at = ?, ended_at = ?, event_id = ? WHERE id = ?`)
-      .run(now, now, eventId, t.id);
-    q('UPDATE events SET tx_id = ? WHERE id = ?').run(t.id, eventId);
-    const paid = q('SELECT * FROM transactions WHERE id = ?').get(t.id);
-    enqueueWebhook(user, paid, 'transaction.paid', publicTx(paid));
-    return { accepted: true, matched: true, amount: parsed.amount, transaction_id: t.id };
+    // Right amount, but the message says the money reached a different card / bank than the
+    // transaction told the payer to use: not confirmed automatically (confirm by hand in the
+    // dashboard). A named card is the stronger signal, so it is checked first.
+    const txCard = q('SELECT id, bank_code FROM cards WHERE id = ?').get(t.card_id);
+    if (cardId && cardId !== txCard.id) {
+      return finish({ matched: false, amount: parsed.amount, reason: 'card_mismatch', transaction_id: t.id });
+    }
+    if (!cardId && bank && txCard.bank_code !== 'unknown' && bank !== txCard.bank_code) {
+      return finish({ matched: false, amount: parsed.amount, reason: 'bank_mismatch', transaction_id: t.id });
+    }
+
+    markPaid(user, t, eventId, now);
+    return finish({ matched: true, amount: parsed.amount, transaction_id: t.id });
+  });
+}
+
+function markPaid(user, t, eventId, now = Date.now()) {
+  q(`UPDATE transactions SET status = 'paid', paid_at = ?, ended_at = ?, event_id = ? WHERE id = ?`)
+    .run(now, now, eventId, t.id);
+  q('UPDATE events SET tx_id = ? WHERE id = ?').run(t.id, eventId);
+  const paid = q('SELECT * FROM transactions WHERE id = ?').get(t.id);
+  enqueueWebhook(user, paid, 'transaction.paid', publicTx(paid));
+}
+
+/**
+ * Which bank (and, if the text names one, which of the user's cards) a message is about.
+ * A bank the user set for the sender wins; otherwise it is read from the sender name / text and
+ * remembered for that sender, so later messages without the bank's name are still recognised.
+ * Works the same for SMS senders and notification app packages.
+ */
+function identifyMessage(userId, type, sender, body) {
+  const key = sender.toLowerCase();
+  const mapped = q('SELECT bank_code FROM sender_banks WHERE user_id = ? AND type = ? AND sender = ?')
+    .get(userId, type, key);
+  let bank = mapped?.bank_code ?? null;
+  if (!bank) {
+    bank = detectBank(sender, body);
+    if (bank) {
+      q('INSERT OR IGNORE INTO sender_banks (user_id, type, sender, bank_code, auto, created_at) VALUES (?, ?, ?, ?, 1, ?)')
+        .run(userId, type, key, bank, Date.now());
+    }
+  }
+  const cards = q('SELECT id, number, account_number FROM cards WHERE user_id = ?').all(userId);
+  return { bank, cardId: identifyCard(body, cards) };
+}
+
+/**
+ * Confirm a received message by hand: pays the pending transaction with the message's amount
+ * (or the one given) even though the bank / card did not match.
+ */
+export function confirmEvent(user, eventId, txId) {
+  return tx(() => {
+    const e = q('SELECT * FROM events WHERE id = ? AND user_id = ?').get(eventId, user.id);
+    if (!e) throw new ApiError(404, 'not_found', 'پیام پیدا نشد');
+    if (e.tx_id) throw new ApiError(409, 'already_matched', 'این پیام قبلاً به تراکنش وصل شده است');
+    const t = txId
+      ? q(`SELECT * FROM transactions WHERE id = ? AND user_id = ? AND status = 'pending'`).get(txId, user.id)
+      : q(`SELECT * FROM transactions WHERE user_id = ? AND status = 'pending' AND amount = ? ORDER BY created_at LIMIT 1`)
+        .get(user.id, e.amount);
+    if (!t) throw new ApiError(409, 'no_pending_transaction', 'تراکنش در انتظاری با این مبلغ وجود ندارد');
+    markPaid(user, t, e.id);
+    q(`UPDATE events SET result = 'confirmed_manually' WHERE id = ?`).run(e.id);
+    return q('SELECT * FROM transactions WHERE id = ?').get(t.id);
   });
 }

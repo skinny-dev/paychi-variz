@@ -247,11 +247,24 @@ const result = await device.ingest({
   body: 'واریز 1,500,003\nمانده 9,000,000',
   received_at: Date.now(),
 });
-// { accepted: true, matched: true, transaction_id: 'tx_…', amount: 1500003 }
+// { accepted: true, matched: true, transaction_id: 'tx_…', amount: 1500003, bank: 'mellat', card_id: null }
 ```
 
 Rules applied on the server: only deposits are matched; SMS from ordinary mobile numbers are
 rejected; if the dashboard has a sender list, only those senders count.
+
+**Bank and card identification** (SMS and notifications alike):
+
+- The bank comes from the sender name or the text (`بانک ملت`, `*بانك سامان*`, `Mellat`…). A bank
+  named after «از» / "from" is the payer's bank and is ignored. Once a sender (SMS sender id or app
+  package) has been recognised, it is remembered, so later messages without a bank name still
+  count; the mapping can be corrected in the dashboard.
+- The card comes from a masked card / account number in the text (`****1234`, `6104-33**-****-0016`)
+  or a full account number saved on the card in the dashboard.
+- If the message points to a **different card or bank** than the transaction with that amount,
+  it is **not** confirmed automatically (`reason: 'card_mismatch' | 'bank_mismatch'`). The dashboard
+  shows it with a «تأیید دستی» (confirm by hand) button.
+- Unknown bank / no card in the text → matched on the unique amount alone, as before.
 
 ## Recipes
 

@@ -48,6 +48,10 @@ runs the end-to-end test (`test/e2e.mjs`) against a temporary database.
    configure. The phone forwards only messages that look like a bank deposit; SMS from ordinary
    mobile numbers and chat / mail notifications are ignored. Optionally list SMS sender ids or
    Android package names to restrict a type to exactly those senders (safer).
+   Each message's **bank** is identified from its sender / text (and remembered per sender or app
+   package), and its **card** from a masked card or account number in the text
+   (`server/bankDetect.js`). A message pointing to a different card or bank than the transaction
+   with that amount is held back for manual confirmation in the dashboard.
 5. **Device** – install the Android app and sign in with the same phone number and password
    as the dashboard; the phone pairs itself. Developers (and the iOS Shortcut) can instead
    create a device token in the "API" tab.

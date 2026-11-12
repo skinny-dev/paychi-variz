@@ -137,6 +137,21 @@ function watchForDevice(active) {
   }, 3000);
 }
 
+const RESULT = {
+  not_a_deposit: 'واریز نیست',
+  no_pending_transaction: 'بدون تراکنش منطبق',
+  bank_mismatch: 'بانک دیگر',
+  card_mismatch: 'کارت دیگر',
+  confirmed_manually: 'تأیید دستی',
+};
+function eventResult(e) {
+  if (e.tx_id) return badge('paid') + (e.result === 'confirmed_manually' ? `<div class="small muted">${RESULT.confirmed_manually}</div>` : '');
+  const label = RESULT[e.result] || (e.is_deposit ? RESULT.no_pending_transaction : RESULT.not_a_deposit);
+  const canConfirm = e.is_deposit && e.amount && ['bank_mismatch', 'card_mismatch'].includes(e.result);
+  return `<span class="badge ${canConfirm ? 'pending' : ''}">${esc(label)}</span>`
+    + (canConfirm ? `<div style="margin-top:6px"><button class="btn tonal sm" data-act="confirmEvent" data-id="${e.id}">تأیید دستی</button></div>` : '');
+}
+
 // ------------------------------------------------------------------ views
 const views = {
   async overview() {
@@ -210,6 +225,8 @@ const views = {
             <div class="field"><label>نام صاحب کارت</label><input name="holder_name" data-holderinput></div>
             <div class="field"><label>سقف روزانه این کارت (ریال) — خالی = پیش‌فرض ${rial(userDefault)}</label>
               <input name="daily_limit" class="ltr" inputmode="numeric"></div>
+            <div class="field"><label>شماره حساب (اختیاری) — برای بانک‌هایی که در پیامک به‌جای کارت، شماره حساب می‌نویسند</label>
+              <input name="account_number" class="ltr mono" inputmode="numeric"></div>
             <button class="btn">ثبت کارت</button>
           </form>
         </div>
@@ -231,6 +248,10 @@ const views = {
             <div class="spread small"><span>دریافتی امروز + رزرو: ${toman(c.received_today + c.reserved)}</span>
               <span class="muted">سقف: ${toman(c.daily_limit)}${c.daily_limit_is_custom ? ' (اختصاصی)' : ''}</span></div>
             <div class="bar" style="margin:6px 0 12px"><i style="width:${Math.min(100, ((c.received_today + c.reserved) / c.daily_limit) * 100)}%"></i></div>
+            <form data-form="cardAccount" data-id="${c.id}" class="row" style="margin-bottom:8px">
+              <input name="account_number" class="ltr mono" inputmode="numeric" placeholder="شماره حساب (اختیاری)" value="${esc(c.account_number || '')}" style="flex:1;min-width:120px">
+              <button class="btn ghost sm">ثبت حساب</button>
+            </form>
             <form data-form="cardLimit" data-id="${c.id}" class="row">
               <input name="daily_limit" class="ltr" inputmode="numeric" placeholder="سقف اختصاصی (ریال)" value="${c.daily_limit_is_custom ? c.daily_limit : ''}" style="flex:1;min-width:120px">
               <button class="btn ghost sm">ثبت سقف</button>
@@ -242,9 +263,11 @@ const views = {
   },
 
   async listen() {
-    const [{ sources }, { devices }, { events }] = await Promise.all([
-      api('GET', '/sources'), api('GET', '/devices'), api('GET', '/events'),
+    const [{ sources }, { devices }, { events }, { sender_banks: senderBanks }] = await Promise.all([
+      api('GET', '/sources'), api('GET', '/devices'), api('GET', '/events'), api('GET', '/sender-banks'),
     ]);
+    const bankOptions = (selected) => Object.entries(state.banks.banks).filter(([code]) => code !== 'unknown')
+      .map(([code, b]) => `<option value="${esc(code)}" ${code === selected ? 'selected' : ''}>${esc(b.name)}</option>`).join('');
     const base = state.me.base_url;
     const tok = state.flash.deviceToken;
     const pair = await ensurePair();
@@ -306,11 +329,32 @@ const views = {
       </div>
 
       <div class="card"><h2>آخرین پیام‌های دریافتی</h2>
-        ${events.length ? `<div class="tablewrap"><table><tr><th>زمان</th><th>فرستنده</th><th>متن</th><th>مبلغ</th><th>نتیجه</th></tr>
-          ${events.map((e) => `<tr><td class="nowrap">${date(e.received_at)}</td><td class="ltr mono">${esc(e.sender)}</td>
+        <p class="muted small">بانک هر پیام از نام فرستنده یا متن (مثلاً «بانک ملت») و کارت از شماره کارت/حساب داخل متن شناسایی می‌شود.
+          اگر پول به کارت یا بانک دیگری غیر از کارت تراکنش رسیده باشد، خودکار تأیید نمی‌شود؛ می‌توانید دستی تأیید کنید.</p>
+        ${events.length ? `<div class="tablewrap"><table><tr><th>زمان</th><th>فرستنده</th><th>بانک / کارت</th><th>متن</th><th>مبلغ</th><th>نتیجه</th></tr>
+          ${events.map((e) => `<tr><td class="nowrap">${date(e.received_at)}</td>
+            <td><span class="ltr mono">${esc(e.sender)}</span><div class="small muted">${e.type === 'notification' ? 'اعلان' : 'پیامک'}</div></td>
+            <td class="nowrap small">${e.bank_name ? esc(e.bank_name) : '<span class="muted">نامشخص</span>'}${e.card_last4 ? `<div class="ltr mono">•••• ${esc(e.card_last4)}</div>` : ''}</td>
             <td class="small" style="white-space:pre-wrap">${esc(e.body)}</td><td class="nowrap">${e.amount ? rial(e.amount) : '—'}</td>
-            <td>${e.tx_id ? badge('paid') : e.is_deposit ? '<span class="badge">بدون تراکنش منطبق</span>' : '<span class="badge">واریز نیست</span>'}</td></tr>`).join('')}</table></div>`
+            <td>${eventResult(e)}</td></tr>`).join('')}</table></div>`
           : `<div class="empty">هنوز پیامی دریافت نشده است.</div>`}
+      </div>
+
+      <div class="card"><h2>بانک فرستنده‌ها</h2>
+        <p class="muted small">بانک هر سرشماره پیامک یا اپلیکیشن بانکی از اولین پیامش یاد گرفته می‌شود تا پیام‌های بعدی بدون نام بانک هم شناخته شوند.
+          اگر اشتباه بود همین‌جا اصلاحش کنید. (برای اعلان‌ها، فرستنده همان نام بسته اپ است که در جدول بالا نمایش داده می‌شود.)</p>
+        <form data-form="senderBank" class="row">
+          <div class="field" style="flex:0 1 150px"><label>نوع</label>
+            <select name="type"><option value="sms">پیامک</option><option value="notification">اعلان اپلیکیشن</option></select></div>
+          <div class="field"><label>سرشماره پیامک / نام بسته اپ</label><input name="sender" class="ltr" placeholder="98200030" required></div>
+          <div class="field"><label>بانک</label><select name="bank_code">${bankOptions('')}</select></div>
+          <button class="btn">ذخیره</button>
+        </form>
+        ${senderBanks.length ? `<div class="tablewrap"><table><tr><th>نوع</th><th>فرستنده</th><th>بانک</th><th>منبع</th><th></th></tr>
+          ${senderBanks.map((x) => `<tr><td>${x.type === 'sms' ? 'پیامک' : 'اعلان'}</td><td class="ltr mono">${esc(x.sender)}</td>
+            <td>${esc(x.bank_name)}</td><td><span class="badge">${x.auto ? 'خودکار' : 'دستی'}</span></td>
+            <td><button class="btn danger sm" data-act="deleteSenderBank" data-id="${x.id}">حذف</button></td></tr>`).join('')}</table></div>`
+          : `<div class="empty">هنوز فرستنده‌ای شناسایی نشده است.</div>`}
       </div>`;
   },
 
@@ -461,6 +505,16 @@ const actions = {
     await api('DELETE', '/devices/' + el.dataset.id);
     await reload();
   },
+  async confirmEvent(el) {
+    if (!confirm('این پیام را برای تراکنش در انتظار با همین مبلغ تأیید می‌کنید؟ وب‌هوک «پرداخت شد» ارسال می‌شود.')) return;
+    await api('POST', `/events/${el.dataset.id}/confirm`, {});
+    toast('تراکنش تأیید شد');
+    await reload();
+  },
+  async deleteSenderBank(el) {
+    await api('DELETE', '/sender-banks/' + el.dataset.id);
+    await reload();
+  },
   async pairQr() {
     await ensurePair(true);
     await reload();
@@ -487,13 +541,26 @@ const forms = {
     await reload();
   },
   async addCard(d) {
-    await api('POST', '/cards', { number: digits(d.number), holder_name: d.holder_name, daily_limit: numOrNull(d.daily_limit) });
+    await api('POST', '/cards', {
+      number: digits(d.number), holder_name: d.holder_name,
+      daily_limit: numOrNull(d.daily_limit), account_number: digits(d.account_number) || null,
+    });
     toast('کارت ثبت شد');
     await reload();
   },
   async cardLimit(d, form) {
     await api('PATCH', '/cards/' + form.dataset.id, { daily_limit: numOrNull(d.daily_limit) });
     toast('سقف کارت ذخیره شد');
+    await reload();
+  },
+  async cardAccount(d, form) {
+    await api('PATCH', '/cards/' + form.dataset.id, { account_number: digits(d.account_number) || null });
+    toast('شماره حساب ذخیره شد');
+    await reload();
+  },
+  async senderBank(d) {
+    await api('POST', '/sender-banks', d);
+    toast('بانک فرستنده ذخیره شد');
     await reload();
   },
   async defaultLimit(d) {

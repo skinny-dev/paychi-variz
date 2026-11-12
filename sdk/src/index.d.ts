@@ -93,6 +93,8 @@ export interface Card {
   /** Rial reserved by pending transactions. */
   reserved: number;
   remaining_today: number;
+  /** Optional account number, used to recognise SMS that name the account instead of the card. */
+  account_number: string | null;
 }
 
 export class VarizError extends Error {
@@ -141,9 +143,18 @@ export interface IngestResult {
   matched: boolean;
   duplicate?: boolean;
   amount?: number;
+  /** The matched transaction, or (for card_mismatch / bank_mismatch) the one with that amount. */
   transaction_id?: string;
-  /** e.g. "not_a_deposit", "source_not_allowed", "sender_is_mobile_number", "no_pending_transaction". */
+  /**
+   * Why it did not match: "not_a_deposit", "source_not_allowed", "sender_is_mobile_number",
+   * "no_pending_transaction", "bank_mismatch" (message is from another bank than the
+   * transaction's card), "card_mismatch" (message names another of your cards).
+   */
   reason?: string;
+  /** Bank the message was identified as coming from (e.g. "mellat"), or null. */
+  bank?: string | null;
+  /** Your card the message names (by card or account number), or null. */
+  card_id?: number | null;
 }
 
 export interface DeviceSession {

@@ -8,9 +8,9 @@ import {
   activeSubscription, createSession, destroySession, hashPassword,
   requireSubscription, requireUser, verifyPassword,
 } from '../auth.js';
-import { bankCodeOf, clientBankTable, luhnValid } from '../banks.js';
+import { bankCodeOf, bankInfo, clientBankTable, luhnValid } from '../banks.js';
 import { normalizeDigits } from '../parser.js';
-import { createTransaction, publicCard, publicTx } from '../services/transactions.js';
+import { confirmEvent, createTransaction, publicCard, publicTx } from '../services/transactions.js';
 import { ApiError, httpUrl, iso, positiveInt, randomToken, rateLimit, sha256 } from '../util.js';
 
 const apkPath = fileURLToPath(new URL('../../public/downloads/paychi-listener.apk', import.meta.url));
@@ -25,6 +25,13 @@ const cleanPassword = (v) => {
     throw new ApiError(400, 'invalid_password', 'رمز عبور باید حداقل ۸ کاراکتر باشد');
   }
   return v;
+};
+/** Optional account number on a card, used to recognise SMS that name the account instead of the card. */
+const cleanAccount = (v) => {
+  const d = normalizeDigits(v ?? '').replace(/\D/g, '');
+  if (!d) return null;
+  if (d.length < 6 || d.length > 26) throw new ApiError(400, 'invalid_account', 'شماره حساب باید ۶ تا ۲۶ رقم باشد');
+  return d;
 };
 const optLimit = (v) =>
   v == null || v === '' ? null : positiveInt(v, 'limit', { min: config.minAmount, max: 100_000_000_000 });
@@ -176,11 +183,12 @@ export default async function dashboardRoutes(app) {
       if (q('SELECT 1 FROM cards WHERE user_id = ? AND number = ?').get(req.user.id, number)) {
         throw new ApiError(409, 'card_exists', 'این کارت قبلاً ثبت شده است');
       }
-      q('INSERT INTO cards (user_id, number, bank_code, holder_name, daily_limit, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      q(`INSERT INTO cards (user_id, number, bank_code, holder_name, daily_limit, account_number, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`)
         .run(
           req.user.id, number, bankCodeOf(number),
           String(req.body?.holder_name ?? '').trim().slice(0, 80) || null,
-          optLimit(req.body?.daily_limit), Date.now(),
+          optLimit(req.body?.daily_limit), cleanAccount(req.body?.account_number), Date.now(),
         );
       return { cards: listCards(req.user) };
     });
@@ -189,10 +197,11 @@ export default async function dashboardRoutes(app) {
       const card = q('SELECT * FROM cards WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
       if (!card) throw new ApiError(404, 'not_found', 'کارت پیدا نشد');
       const b = req.body ?? {};
-      q('UPDATE cards SET daily_limit = ?, active = ?, holder_name = ? WHERE id = ?').run(
+      q('UPDATE cards SET daily_limit = ?, active = ?, holder_name = ?, account_number = ? WHERE id = ?').run(
         'daily_limit' in b ? optLimit(b.daily_limit) : card.daily_limit,
         'active' in b ? (b.active ? 1 : 0) : card.active,
         'holder_name' in b ? String(b.holder_name ?? '').trim().slice(0, 80) || null : card.holder_name,
+        'account_number' in b ? cleanAccount(b.account_number) : card.account_number,
         card.id,
       );
       return { cards: listCards(req.user) };
@@ -311,9 +320,47 @@ export default async function dashboardRoutes(app) {
 
     r.get('/events', async (req) => ({
       events: q(
-        'SELECT id, type, sender, body, amount, is_deposit, tx_id, received_at FROM events WHERE user_id = ? ORDER BY id DESC LIMIT 50',
-      ).all(req.user.id).map((e) => ({ ...e, is_deposit: !!e.is_deposit, received_at: iso(e.received_at) })),
+        `SELECT e.id, e.type, e.sender, e.body, e.amount, e.is_deposit, e.tx_id, e.received_at, e.bank_code, e.result,
+                e.card_id, c.number AS card_number
+         FROM events e LEFT JOIN cards c ON c.id = e.card_id
+         WHERE e.user_id = ? ORDER BY e.id DESC LIMIT 50`,
+      ).all(req.user.id).map((e) => ({
+        ...e,
+        is_deposit: !!e.is_deposit,
+        bank_name: e.bank_code ? bankInfo(e.bank_code).name : null,
+        card_last4: e.card_number ? e.card_number.slice(-4) : null,
+        card_number: undefined,
+        received_at: iso(e.received_at),
+      })),
     }));
+
+    // Confirm a message by hand (e.g. the money reached another of your cards).
+    r.post('/events/:id/confirm', async (req) =>
+      publicTx(confirmEvent(req.user, Number(req.params.id), req.body?.transaction_id || null)));
+
+    // ----- which bank each SMS sender / app belongs to (learned automatically, editable) -----
+    const listSenderBanks = (uid) =>
+      q('SELECT id, type, sender, bank_code, auto FROM sender_banks WHERE user_id = ? ORDER BY type, sender').all(uid)
+        .map((s) => ({ ...s, auto: !!s.auto, bank_name: bankInfo(s.bank_code).name }));
+
+    r.get('/sender-banks', async (req) => ({ sender_banks: listSenderBanks(req.user.id), banks: clientBankTable.banks }));
+
+    r.post('/sender-banks', async (req) => {
+      const type = req.body?.type === 'notification' ? 'notification' : 'sms';
+      const sender = String(req.body?.sender ?? '').trim().toLowerCase().slice(0, 120);
+      const bank = String(req.body?.bank_code ?? '');
+      if (!sender) throw new ApiError(400, 'invalid_sender', 'فرستنده را وارد کنید');
+      if (!clientBankTable.banks[bank] || bank === 'unknown') throw new ApiError(400, 'invalid_bank', 'بانک نامعتبر است');
+      q(`INSERT INTO sender_banks (user_id, type, sender, bank_code, auto, created_at) VALUES (?, ?, ?, ?, 0, ?)
+         ON CONFLICT (user_id, type, sender) DO UPDATE SET bank_code = excluded.bank_code, auto = 0`)
+        .run(req.user.id, type, sender, bank, Date.now());
+      return { sender_banks: listSenderBanks(req.user.id) };
+    });
+
+    r.delete('/sender-banks/:id', async (req) => {
+      q('DELETE FROM sender_banks WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+      return { sender_banks: listSenderBanks(req.user.id) };
+    });
 
     r.get('/webhooks', async (req) => ({
       deliveries: q(
