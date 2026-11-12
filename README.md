@@ -53,6 +53,16 @@ runs the end-to-end test (`test/e2e.mjs`) against a temporary database.
    create a device token in the "API" tab.
 6. **API key + webhook** – integrate.
 
+## JavaScript SDK
+
+`sdk/` is a zero-dependency client (`@paychi/variz`, private) with TypeScript types:
+transactions, `waitForPayment`, webhook verification and a `VarizDevice` client for custom
+listeners. Full documentation and recipes: [sdk/README.md](sdk/README.md).
+
+```bash
+npm install ../paychi-variz/sdk --install-links
+```
+
 ## Merchant API
 
 Auth: `Authorization: Bearer pk_live_…`. Amounts are integer **Rial**.

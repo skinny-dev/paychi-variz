@@ -1,0 +1,24 @@
+{
+  "name": "@paychi/variz",
+  "version": "0.1.0",
+  "private": true,
+  "description": "JavaScript client for the Paychi Variz API: card-to-card payments with unique amounts, webhooks and listener devices.",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    }
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false,
+  "license": "UNLICENSED"
+}

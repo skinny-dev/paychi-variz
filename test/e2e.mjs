@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { parseBankMessage } from '../server/parser.js';
+import { Variz, VarizDevice, VarizError, verifyWebhook, signWebhook } from '../sdk/src/index.js';
 
 const PORT = 3987;
 const HOOK_PORT = 3988;
@@ -221,6 +222,33 @@ try {
   assert.equal((await api('POST', `/transactions/${t3.id}/cancel`, {})).json.status, 'cancelled');
   assert.equal((await api('POST', `/transactions/${t3.id}/cancel`, {})).status, 409);
   ok('cancel');
+
+  // ---- JavaScript SDK against the real server
+  const variz = new Variz({ apiKey, baseUrl: BASE });
+  const s1 = await variz.transactions.create({ amount: 2_222_000, order_id: 'SDK-1', metadata: { a: 1 } });
+  assert.equal(s1.status, 'pending');
+  assert.equal((await variz.transactions.get(s1.id)).order_id, 'SDK-1');
+  assert.equal((await variz.transactions.list({ order_id: 'SDK-1' }))[0].id, s1.id);
+  assert.ok((await variz.cards.list()).length >= 2);
+  await assert.rejects(new Variz({ apiKey: 'nope', baseUrl: BASE }).transactions.get(s1.id),
+    (e) => e instanceof VarizError && e.status === 401 && e.code === 'invalid_api_key');
+  await assert.rejects(variz.transactions.get('tx_missing'), (e) => e.code === 'not_found');
+  // waitForPayment resolves once a custom listener (VarizDevice) reports the deposit
+  const sdkPair = (await call('POST', '/api/dash/pairing', {})).json;
+  const { device: sdkDev } = await VarizDevice.pair({ code: sdkPair.url.replace(/^https?:\/\/[^/]+/, BASE), deviceName: 'sdk' });
+  const waiting = variz.transactions.waitForPayment(s1.id, { interval: 200 });
+  const ing = await sdkDev.ingest({ sender: 'Bank Mellat', body: `واریز ${s1.amount.toLocaleString('en-US')}\nمانده 1`, received_at: 42 });
+  assert.equal(ing.transaction_id, s1.id);
+  assert.equal((await waiting).status, 'paid');
+  // webhook verification
+  const sdkHook = await waitFor(() => hooks.find((h) => h.headers['x-paychi-event'] === 'transaction.paid' && JSON.parse(h.body).data.id === s1.id));
+  const ev = await verifyWebhook(sdkHook.body, sdkHook.headers['x-paychi-signature'], secret);
+  assert.equal(ev.data.order_id, 'SDK-1');
+  await assert.rejects(verifyWebhook(sdkHook.body + ' ', sdkHook.headers['x-paychi-signature'], secret), (e) => e.code === 'invalid_signature');
+  await assert.rejects(verifyWebhook(sdkHook.body, await signWebhook(sdkHook.body, secret, 1000), secret), (e) => e.code === 'invalid_signature');
+  assert.equal((await verifyWebhook(Buffer.from('{"x":1}'), await signWebhook('{"x":1}', 's'), 's')).x, 1);
+  await sdkDev.logout();
+  ok('SDK: create/get/list/cards, errors, VarizDevice pair+ingest, waitForPayment, verifyWebhook');
 
   // daily ceiling: card B has a 5M limit, card A 100M
   r = await api('POST', '/transactions', { amount: 6_000_000, card_id: cardB.id });
