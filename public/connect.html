@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex">
+  <meta name="referrer" content="no-referrer">
+  <title>اتصال گوشی — پی‌چی واریز</title>
+  <script src="/platform.js"></script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="paypage">
+<div class="pay">
+  <div class="brand" style="padding-inline:0"><i></i> پی‌چی واریز</div>
+
+  <div class="card" id="guide">
+    <h2>اتصال این گوشی</h2>
+    <p class="muted">این صفحه را روی همان گوشی‌ای باز کنید که پیامک‌های بانک را دریافت می‌کند.</p>
+
+    <ul class="steps" style="margin-bottom:16px">
+      <li><span class="dot">۱</span><div style="flex:1">
+        <b>اپ را نصب کنید</b>
+        <div class="small muted">اگر قبلاً نصب کرده‌اید این مرحله را رد کنید.</div>
+        <a class="btn tonal sm" id="apk" href="/downloads/paychi-listener.apk" style="margin-top:8px">دانلود اپ اندروید</a>
+      </div></li>
+      <li><span class="dot">۲</span><div style="flex:1">
+        <b>گوشی را وصل کنید</b>
+        <div class="small muted">اپ باز می‌شود و از شما تأیید می‌گیرد.</div>
+      </div></li>
+      <li><span class="dot">۳</span><div style="flex:1">
+        <b>دسترسی‌ها را بدهید</b>
+        <div class="small muted">اپ خودش اجازه «دریافت پیامک» را می‌پرسد. اگر اندروید گفت «Restricted setting»:
+          اطلاعات برنامه ← سه‌نقطه ⋮ ← Allow restricted settings، و دوباره امتحان کنید.</div>
+      </div></li>
+    </ul>
+
+    <a class="btn block" id="open" href="#">اتصال این گوشی</a>
+    <p class="small muted center" style="margin:12px 0 0">این لینک یک‌بارمصرف است و ۱۰ دقیقه اعتبار دارد.</p>
+  </div>
+
+  <div class="note warn" id="ios" hidden>
+    اپ شنونده فقط برای اندروید است. در آیفون از شورتکات استفاده کنید؛ راهنمای آن در داشبورد، بخش «دستگاه‌ها» است.
+  </div>
+  <div class="note warn" id="nocode" hidden>
+    این لینک کد اتصال ندارد. از داشبورد، بخش «دستگاه‌ها»، دکمه «اتصال سریع با QR» را بزنید.
+  </div>
+</div>
+<script>
+  const code = location.hash.slice(1);
+  const valid = /^[A-Za-z0-9_-]{16,64}$/.test(code);
+  document.getElementById('nocode').hidden = valid;
+  document.getElementById('ios').hidden = document.documentElement.dataset.platform !== 'ios';
+  const open = document.getElementById('open');
+  if (valid) {
+    // Custom scheme handled by the Android app, which asks for confirmation before connecting.
+    open.href = 'paychi://pair?u=' + encodeURIComponent(location.origin) + '&c=' + encodeURIComponent(code);
+  } else {
+    open.remove();
+  }
+  fetch('/downloads/paychi-listener.apk', { method: 'HEAD' })
+    .then((r) => { if (!r.ok) document.getElementById('apk').remove(); })
+    .catch(() => {});
+</script>
+</body>
+</html>

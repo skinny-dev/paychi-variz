@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>پی‌چی واریز — اتوماسیون کارت به کارت</title>
+  <script src="/platform.js"></script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="landing">
+  <div class="brand" style="padding-inline:0"><i></i> پی‌چی واریز</div>
+
+  <div class="hero">
+    <div>
+      <h1>کارت به کارت را خودکار تأیید کنید</h1>
+      <p class="muted">
+        برای هر پرداخت یک شناسه یکتا و یک مبلغ یکتا می‌سازیم. به‌محض رسیدن پیامک یا اعلان واریز به گوشی شما،
+        تراکنش تأیید می‌شود و وب‌هوک به سیستم شما ارسال می‌گردد.
+      </p>
+      <div class="grid g3" style="margin-top:20px">
+        <div class="stat"><b>۱</b><span>پلن اشتراک را انتخاب کنید</span></div>
+        <div class="stat"><b>۲</b><span>کارت‌ها و منابع پیامک/اعلان را ثبت کنید</span></div>
+        <div class="stat"><b>۳</b><span>با API تراکنش بسازید و وب‌هوک بگیرید</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="tabs">
+        <button id="tab-login" class="on" type="button">ورود</button>
+        <button id="tab-register" type="button">ثبت‌نام</button>
+      </div>
+      <form id="auth">
+        <div class="field" id="name-field" hidden>
+          <label for="name">نام</label>
+          <input id="name" autocomplete="name">
+        </div>
+        <div class="field">
+          <label for="phone">شماره موبایل</label>
+          <input id="phone" class="ltr" inputmode="tel" placeholder="09xxxxxxxxx" autocomplete="username" required>
+        </div>
+        <div class="field">
+          <label for="password">رمز عبور</label>
+          <input id="password" class="ltr" type="password" minlength="8" autocomplete="current-password" required>
+        </div>
+        <p id="err" class="note" style="background:var(--error-container);color:var(--on-error-container)" hidden></p>
+        <button class="btn block" id="submit">ورود</button>
+      </form>
+    </div>
+  </div>
+</div>
+<script>
+  const $ = (s) => document.querySelector(s);
+  let mode = 'login';
+  fetch('/api/dash/me').then((r) => { if (r.ok) location.href = '/dashboard'; });
+
+  function setMode(m) {
+    mode = m;
+    $('#tab-login').classList.toggle('on', m === 'login');
+    $('#tab-register').classList.toggle('on', m === 'register');
+    $('#name-field').hidden = m === 'login';
+    $('#submit').textContent = m === 'login' ? 'ورود' : 'ساخت حساب';
+    $('#password').autocomplete = m === 'login' ? 'current-password' : 'new-password';
+    $('#err').hidden = true;
+  }
+  $('#tab-login').onclick = () => setMode('login');
+  $('#tab-register').onclick = () => setMode('register');
+
+  $('#auth').onsubmit = async (e) => {
+    e.preventDefault();
+    $('#submit').disabled = true;
+    try {
+      const res = await fetch('/api/dash/' + mode, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ phone: $('#phone').value, password: $('#password').value, name: $('#name').value }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error?.message || 'خطا');
+      location.href = '/dashboard';
+    } catch (err) {
+      $('#err').textContent = err.message;
+      $('#err').hidden = false;
+    } finally {
+      $('#submit').disabled = false;
+    }
+  };
+</script>
+</body>
+</html>

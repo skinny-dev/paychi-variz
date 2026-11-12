@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Material 3 colour roles: same teal scheme as the web dashboard. -->
+    <color name="md_primary">#006A60</color>
+    <color name="md_on_primary">#FFFFFF</color>
+    <color name="md_primary_container">#9EF2E4</color>
+    <color name="md_on_primary_container">#00201C</color>
+    <color name="md_secondary_container">#CCE8E2</color>
+    <color name="md_on_secondary_container">#05201C</color>
+    <color name="md_surface">#F4FBF8</color>
+    <color name="md_on_surface">#161D1C</color>
+    <color name="md_surface_variant">#DAE5E1</color>
+    <color name="md_on_surface_variant">#3F4947</color>
+    <color name="md_surface_container_low">#EFF5F2</color>
+    <color name="md_surface_container">#E9EFEC</color>
+    <color name="md_surface_container_highest">#DDE4E1</color>
+    <color name="md_outline">#6F7977</color>
+    <color name="md_outline_variant">#BEC9C6</color>
+    <color name="md_error">#BA1A1A</color>
+
+    <style name="Theme.Paychi" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/md_primary</item>
+        <item name="colorOnPrimary">@color/md_on_primary</item>
+        <item name="colorPrimaryContainer">@color/md_primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/md_on_primary_container</item>
+        <item name="colorSecondaryContainer">@color/md_secondary_container</item>
+        <item name="colorOnSecondaryContainer">@color/md_on_secondary_container</item>
+        <item name="android:colorBackground">@color/md_surface</item>
+        <item name="colorSurface">@color/md_surface</item>
+        <item name="colorOnSurface">@color/md_on_surface</item>
+        <item name="colorSurfaceVariant">@color/md_surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/md_on_surface_variant</item>
+        <item name="colorSurfaceContainerLow">@color/md_surface_container_low</item>
+        <item name="colorSurfaceContainer">@color/md_surface_container</item>
+        <item name="colorSurfaceContainerHighest">@color/md_surface_container_highest</item>
+        <item name="colorOutline">@color/md_outline</item>
+        <item name="colorOutlineVariant">@color/md_outline_variant</item>
+        <item name="colorError">@color/md_error</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

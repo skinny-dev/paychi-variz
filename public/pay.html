@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex">
+  <title>پرداخت کارت به کارت</title>
+  <script src="/platform.js"></script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="paypage">
+<div class="pay" id="root"><div class="card center muted">در حال بارگذاری…</div></div>
+<div id="toast"></div>
+<script>
+  const root = document.getElementById('root');
+  const id = location.pathname.split('/').filter(Boolean).pop();
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const fa = (n) => Number(n).toLocaleString('fa-IR');
+  const group = (n) => String(n).replace(/(\d{4})(?=\d)/g, '$1 ');
+  let tx = null, skew = 0, totalMs = 0, view = '', pollTimer = null, redirectTimer = null;
+
+  function toast(msg) {
+    const t = document.getElementById('toast');
+    t.innerHTML = `<div>${esc(msg)}</div>`;
+    clearTimeout(toast.timer);
+    toast.timer = setTimeout(() => (t.innerHTML = ''), 2200);
+  }
+  async function copy(text, label) {
+    try { await navigator.clipboard.writeText(text); }
+    catch {
+      const ta = Object.assign(document.createElement('textarea'), { value: text });
+      document.body.append(ta); ta.select(); document.execCommand('copy'); ta.remove();
+    }
+    toast(label + ' کپی شد');
+  }
+  const remaining = () => new Date(tx.expires_at).getTime() - (Date.now() + skew);
+
+  function returnLink(status) {
+    if (!tx.return_url) return null;
+    try {
+      const u = new URL(tx.return_url);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+      u.searchParams.set('tx_id', tx.id);
+      u.searchParams.set('status', status);
+      return u.toString();
+    } catch { return null; }
+  }
+
+  function final(kind, icon, title, text, status) {
+    const link = returnLink(status);
+    root.innerHTML = `<div class="card center">
+      <div class="state ${kind}">${icon}</div><h2>${esc(title)}</h2><p class="muted">${esc(text)}</p>
+      ${tx ? `<p class="small muted ltr mono" style="text-align:center">${esc(tx.id)}</p>` : ''}
+      ${link ? `<a class="btn block" href="${esc(link)}">بازگشت به سایت پذیرنده</a>` : ''}</div>`;
+    if (link && status === 'paid' && !redirectTimer) redirectTimer = setTimeout(() => (location.href = link), 5000);
+  }
+
+  function render() {
+    const left = tx.status === 'pending' ? remaining() : 0;
+    const next = tx.status !== 'pending' ? tx.status : left <= 0 ? 'timeup' : 'pending';
+    if (next === 'pending' && view === 'pending') return tickTimer();
+    if (next === view) return;
+    view = next;
+
+    if (next === 'paid') return final('ok', '✓', 'پرداخت تأیید شد', `مبلغ ${fa(tx.amount)} ریال با موفقیت دریافت شد.`, 'paid');
+    if (next === 'cancelled') return final('bad', '✕', 'تراکنش لغو شد', 'این تراکنش توسط پذیرنده لغو شده است. لطفاً مبلغی واریز نکنید.', 'cancelled');
+    if (next === 'expired' || next === 'timeup') {
+      return final('bad', '⏱', 'مهلت پرداخت تمام شد',
+        next === 'timeup' ? 'اگر همین حالا واریز کرده‌اید چند لحظه صبر کنید؛ در غیر این صورت مبلغی واریز نکنید و تراکنش جدید بسازید.'
+          : 'لطفاً مبلغی واریز نکنید و از سایت پذیرنده تراکنش جدید بسازید.', 'expired');
+    }
+
+    const c = tx.card;
+    root.innerHTML = `
+      <div class="card">
+        <div class="center">
+          <div class="muted small">${esc(tx.description || 'مبلغ قابل پرداخت')}</div>
+          <div class="amount">${fa(tx.amount)} <small>ریال</small></div>
+          <div class="muted small">معادل ${fa(Math.floor(tx.amount / 10))} تومان${tx.amount % 10 ? ` و ${fa(tx.amount % 10)} ریال` : ''}</div>
+        </div>
+        <div class="note warn" style="margin-top:14px">
+          <b>دقیقاً همین مبلغ</b> را کارت به کارت کنید. حتی یک ریال کمتر یا بیشتر باعث می‌شود پرداخت شما به‌صورت خودکار تأیید نشود.
+        </div>
+        <div style="display:grid;place-items:center;margin:16px 0 4px">
+          <div class="bankcard" style="--c1:${esc(c.colors[0])};--c2:${esc(c.colors[1])}">
+            <div class="spread"><span class="bname">${esc(c.bank_name)}</span><span class="chip"></span></div>
+            <div class="num">${esc(group(c.number))}</div>
+            <div class="holder">${esc(c.holder_name || '')}&nbsp;</div>
+          </div>
+        </div>
+        <div class="copyrow">
+          <button class="btn" id="copy-card">کپی شماره کارت</button>
+          <button class="btn tonal" id="copy-amount">کپی مبلغ</button>
+        </div>
+        <div class="timer"><span><span class="pulse"></span>در انتظار واریز…</span><b id="clock"></b></div>
+        <div class="bar" id="bar"><i id="fill"></i></div>
+        <p class="small muted center" style="margin:14px 0 0">پس از واریز، این صفحه به‌صورت خودکار به‌روز می‌شود.</p>
+      </div>
+      <p class="small muted center ltr mono">${esc(tx.id)}</p>`;
+    document.getElementById('copy-card').onclick = () => copy(c.number, 'شماره کارت');
+    document.getElementById('copy-amount').onclick = () => copy(String(tx.amount), 'مبلغ');
+    tickTimer();
+  }
+
+  function tickTimer() {
+    const clock = document.getElementById('clock');
+    if (!clock) return;
+    const s = Math.max(0, Math.ceil(remaining() / 1000));
+    clock.textContent = `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    document.getElementById('fill').style.width = Math.max(0, Math.min(100, (remaining() / totalMs) * 100)) + '%';
+    document.getElementById('bar').classList.toggle('low', s <= 60);
+  }
+
+  async function load() {
+    try {
+      const res = await fetch('/api/pay/' + encodeURIComponent(id), { cache: 'no-store' });
+      if (res.status === 404) {
+        clearInterval(pollTimer);
+        return final('bad', '?', 'تراکنش پیدا نشد', 'لینک پرداخت معتبر نیست.', 'not_found');
+      }
+      if (!res.ok) return;
+      const first = !tx;
+      const data = await res.json();
+      if (!data.card && tx?.card) data.card = tx.card;
+      tx = data;
+      skew = new Date(tx.server_time).getTime() - Date.now();
+      if (first) totalMs = Math.max(1, remaining());
+      render();
+      if (tx.status !== 'pending') clearInterval(pollTimer);
+    } catch { /* network hiccup: keep polling */ }
+  }
+
+  load();
+  pollTimer = setInterval(load, 3000);
+  setInterval(() => tx && render(), 1000);
+</script>
+</body>
+</html>
