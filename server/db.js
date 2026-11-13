@@ -204,6 +204,47 @@ for (const u of db.prepare(
   }
 }
 
+// Payment links: a shareable page (/l/<slug>) where a payer starts a transaction of a merchant
+// without any integration. amount NULL = the payer enters the amount (within min/max).
+db.exec(`
+CREATE TABLE IF NOT EXISTS payment_links (
+  id INTEGER PRIMARY KEY,
+  slug TEXT NOT NULL UNIQUE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  merchant_id INTEGER NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT,
+  amount INTEGER,
+  min_amount INTEGER,
+  max_amount INTEGER,
+  ask_payer INTEGER NOT NULL DEFAULT 0,   -- ask the payer for name + phone
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS links_merchant ON payment_links (merchant_id);
+`);
+if (!hasColumn('transactions', 'link_id')) db.exec('ALTER TABLE transactions ADD COLUMN link_id INTEGER');
+
+// Telegram alerts: chats that get a message when a payment arrives (or is held for confirmation).
+// merchant_id NULL = every merchant of the account.
+db.exec(`
+CREATE TABLE IF NOT EXISTS notify_channels (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  merchant_id INTEGER REFERENCES merchants(id) ON DELETE CASCADE,
+  chat_id TEXT NOT NULL,
+  title TEXT,
+  last_error TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS notify_codes (
+  code_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  merchant_id INTEGER REFERENCES merchants(id) ON DELETE CASCADE,
+  expires_at INTEGER NOT NULL
+);
+`);
+
 const cache = new Map();
 /** Cached prepared statement. */
 export function q(sql) {

@@ -12,6 +12,8 @@ import { bankCodeOf, bankInfo, clientBankTable, luhnValid } from '../banks.js';
 import { normalizeDigits } from '../parser.js';
 import { confirmEvent, createTransaction, publicCard, publicTx } from '../services/transactions.js';
 import { ApiError, iso, positiveInt, randomToken, rateLimit, sha256 } from '../util.js';
+import { createLink, dashLink, deleteLink, updateLink } from '../services/links.js';
+import { createConnectCode, deleteChannel, listChannels, telegramStatus, testChannel } from '../services/telegram.js';
 import {
   createMerchant, dashMerchant, deleteMerchant, getMerchant, rotateApiKey, rotateWebhookSecret, updateMerchant,
 } from '../services/merchants.js';
@@ -171,6 +173,34 @@ export default async function dashboardRoutes(app) {
     r.post('/merchants/:id/api-key', async (req) => ({ api_key: rotateApiKey(req.user.id, req.params.id) }));
     r.post('/merchants/:id/webhook-secret', async (req) =>
       ({ webhook_secret: rotateWebhookSecret(req.user.id, req.params.id) }));
+
+    // ----- payment links (per merchant) -----
+    const linksOf = async (mid) =>
+      Promise.all(q('SELECT * FROM payment_links WHERE merchant_id = ? ORDER BY active DESC, id DESC').all(mid).map(dashLink));
+    r.get('/merchants/:id/links', async (req) =>
+      ({ links: await linksOf(getMerchant(req.user.id, req.params.id).id) }));
+    r.post('/merchants/:id/links', async (req) => {
+      const l = createLink(req.user.id, req.params.id, req.body ?? {});
+      return { link: await dashLink(l), links: await linksOf(l.merchant_id) };
+    });
+    r.patch('/links/:id', async (req) => {
+      const l = updateLink(req.user.id, req.params.id, req.body ?? {});
+      return { links: await linksOf(l.merchant_id) };
+    });
+    r.delete('/links/:id', async (req) => deleteLink(req.user.id, req.params.id));
+
+    // ----- Telegram alerts (per merchant) -----
+    r.get('/merchants/:id/telegram', async (req) => {
+      const m = getMerchant(req.user.id, req.params.id);
+      return { ...telegramStatus(), channels: listChannels(req.user.id, m.id) };
+    });
+    r.post('/merchants/:id/telegram/connect', async (req) =>
+      createConnectCode(req.user.id, getMerchant(req.user.id, req.params.id).id));
+    r.post('/telegram/:id/test', async (req) => testChannel(req.user.id, req.params.id));
+    r.delete('/telegram/:id', async (req) => {
+      deleteChannel(req.user.id, req.params.id);
+      return { ok: true };
+    });
 
     // ----- cards -----
     const listCards = (user) =>

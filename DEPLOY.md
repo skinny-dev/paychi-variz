@@ -34,6 +34,8 @@ must be set:
 | `BILLING_MODE` | `off` for internal use: no plan needed, no limits (pricing comes later) |
 | `SIGNUP_CODE` | invite code needed to sign up; keeps strangers out of a private server |
 | `APK_URL` | only if the APK is not inside the image (see below) |
+| `TELEGRAM_BOT_TOKEN` | optional: payment alerts in Telegram (bot from @BotFather) |
+| `TELEGRAM_API_BASE` | optional: a relay / proxy if the server cannot reach `api.telegram.org` |
 
 On start, the server warns in the logs if `BASE_URL` is not https, or if sign-up is free and open
 (no `SIGNUP_CODE`).

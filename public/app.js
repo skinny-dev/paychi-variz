@@ -412,10 +412,13 @@ const views = {
   },
 
   async merchant(id) {
-    const [{ merchant: m }, { cards }, { transactions }, { deliveries }] = await Promise.all([
+    const [{ merchant: m }, { cards }, { transactions }, { deliveries }, { links }, tg] = await Promise.all([
       api('GET', '/merchants/' + id), api('GET', '/cards'),
       api('GET', `/transactions?merchant_id=${id}`), api('GET', `/webhooks?merchant_id=${id}`),
+      api('GET', `/merchants/${id}/links`), api('GET', `/merchants/${id}/telegram`),
     ]);
+    state.tgCount = tg.channels.length;
+    const conn = state.tgConnect?.merchantId === m.id ? state.tgConnect : null;
     const { defaults, base_url: base } = state.me;
     const key = state.flash.apiKey?.merchantId === m.id ? state.flash.apiKey.key : null;
     const sel = new Set(m.card_ids);
@@ -477,10 +480,60 @@ const tx = await variz.transactions.create({ amount: 1500000, order_id: 'INV-1' 
             <a href="${esc(state.flash.tx.payment_url)}" target="_blank" rel="noopener">باز کردن صفحه پرداخت</a></div>` : ''}
         </div>
       </div>
+      <div class="card"><h2>لینک‌های پرداخت</h2>
+        <p class="muted small">بدون برنامه‌نویسی: لینک را در اینستاگرام، تلگرام یا سایت بگذارید. خریدار لینک را باز می‌کند،
+          (مبلغ را وارد می‌کند) و شماره کارت و مبلغ یکتا را می‌گیرد. پرداخت مثل بقیه تراکنش‌های این فروشگاه تأیید می‌شود.</p>
+        <form data-form="createLink" data-id="${m.id}" class="row">
+          <div class="field"><label>عنوان</label><input name="title" required maxlength="120" placeholder="مثلاً اشتراک یک‌ماهه"></div>
+          <div class="field" style="flex:0 1 180px"><label>مبلغ (ریال) — خالی = خریدار وارد کند</label><input name="amount" class="ltr" inputmode="numeric"></div>
+          <label class="row small" style="gap:6px;flex:0 1 auto"><input type="checkbox" name="ask_payer" style="width:auto"> نام و شماره خریدار را بپرس</label>
+          <button class="btn">ساخت لینک</button>
+        </form>
+        ${links.length ? `<div class="grid g2" style="margin-top:12px">${links.map((l) => `
+          <div class="card" style="margin:0;${l.active ? '' : 'opacity:.6'}">
+            <div class="spread"><b>${esc(l.title)}</b>${l.active ? '' : '<span class="badge cancelled">غیرفعال</span>'}</div>
+            <div class="small muted">${l.amount ? rial(l.amount) : 'مبلغ دلخواه خریدار'}${l.ask_payer ? ' — نام و شماره خریدار' : ''}
+              — ${fa(l.paid)} پرداخت (${toman(l.paid_sum)})</div>
+            <div class="qrbox" style="margin-top:8px"><div class="qr" style="width:110px">${l.qr_svg}</div>
+              <div style="flex:1 1 160px">
+                <div class="secret small">${esc(l.url)}</div>
+                <div class="row" style="margin-top:8px">
+                  <button class="btn ghost sm" data-act="copy" data-text="${esc(l.url)}">کپی لینک</button>
+                  <a class="btn ghost sm" href="${esc(l.url)}" target="_blank" rel="noopener">باز کردن</a>
+                  <button class="btn ghost sm" data-act="toggleLink" data-id="${l.id}" data-active="${l.active ? 0 : 1}">${l.active ? 'غیرفعال' : 'فعال'}</button>
+                  <button class="btn danger sm" data-act="deleteLink" data-id="${l.id}">حذف</button>
+                </div>
+              </div>
+            </div>
+          </div>`).join('')}</div>` : ''}
+      </div>
+
+      <div class="card"><h2>اعلان پرداخت در تلگرام</h2>
+        ${!tg.enabled ? `<div class="note">ربات تلگرام روی سرور تنظیم نشده است. در @BotFather یک ربات بسازید و توکن آن را
+            در متغیر <code class="inline">TELEGRAM_BOT_TOKEN</code> سرور بگذارید (اگر سرور به تلگرام دسترسی ندارد،
+            <code class="inline">TELEGRAM_API_BASE</code> را روی یک رله/پروکسی تنظیم کنید).</div>`
+          : `<p class="muted small">هر پرداخت موفق این فروشگاه (و واریزی که برای تأیید دستی نگه داشته شده) به گفتگوی تلگرام شما پیام می‌شود.
+              می‌توانید ربات را به یک گروه هم اضافه کنید.</p>
+            ${conn ? `<div class="note">
+                ${conn.link ? `<a class="btn" href="${esc(conn.link)}" target="_blank" rel="noopener">باز کردن تلگرام و زدن Start</a>` : ''}
+                <p class="small" style="margin:10px 0 4px">یا این کد را برای ربات ${conn.bot ? `<b class="ltr">@${esc(conn.bot)}</b>` : ''} بفرستید:</p>
+                <div class="secret">${esc(conn.code)}</div>
+                <div class="small muted" style="margin-top:6px"><span class="pulse"></span>در انتظار اتصال… این صفحه خودش به‌روز می‌شود.</div>
+              </div>`
+              : `<button class="btn" data-act="tgConnect" data-id="${m.id}">اتصال تلگرام</button>`}
+            ${tg.channels.length ? `<div class="tablewrap" style="margin-top:12px"><table><tr><th>گفتگو</th><th>وضعیت</th><th></th></tr>
+              ${tg.channels.map((c) => `<tr><td>${esc(c.title || c.chat_id)}</td>
+                <td class="small">${c.last_error ? `<span class="badge failed">خطا</span> <span class="muted ltr">${esc(c.last_error)}</span>` : '<span class="badge paid">فعال</span>'}</td>
+                <td class="nowrap"><button class="btn ghost sm" data-act="tgTest" data-id="${c.id}">پیام آزمایشی</button>
+                  <button class="btn danger sm" data-act="tgDelete" data-id="${c.id}">حذف</button></td></tr>`).join('')}</table></div>` : ''}`}
+      </div>
+
       <div class="card"><h2>آخرین تراکنش‌ها</h2>
         ${transactions.length ? `<div class="tablewrap"><table><tr><th>شناسه</th><th>مبلغ</th><th>سفارش</th><th>کارت</th><th>وضعیت</th><th>ایجاد</th></tr>
           ${transactions.slice(0, 10).map((t) => `<tr><td class="ltr mono small"><a href="${esc(t.payment_url)}" target="_blank" rel="noopener">${esc(t.id)}</a></td>
-            <td class="nowrap">${rial(t.amount)}</td><td class="ltr small">${esc(t.order_id || '—')}</td>
+            <td class="nowrap">${rial(t.amount)}</td><td class="small">${t.metadata?.payer_name
+              ? `${esc(t.metadata.payer_name)}<div class="ltr muted">${esc(t.metadata.payer_phone || '')}</div>`
+              : `<span class="ltr">${esc(t.order_id || (t.metadata?.payment_link ? 'لینک پرداخت' : '—'))}</span>`}</td>
             <td class="small">${esc(t.card.bank_name)} <span class="ltr mono">${esc(last4(t.card.number))}</span></td>
             <td>${badge(t.status)}</td><td class="nowrap small">${date(t.created_at)}</td></tr>`).join('')}</table></div>
           ${transactions.length > 10 ? `<a class="btn ghost sm" style="margin-top:8px" data-act="txOfMerchant" data-id="${m.id}">همه تراکنش‌ها</a>` : ''}`
@@ -653,6 +706,47 @@ const actions = {
     await api('POST', `/merchants/${el.dataset.id}/webhook-secret`, {});
     await reload();
   },
+  async toggleLink(el) {
+    await api('PATCH', '/links/' + el.dataset.id, { active: el.dataset.active === '1' });
+    await reload();
+  },
+  async deleteLink(el) {
+    if (!confirm('این لینک حذف شود؟')) return;
+    const r = await api('DELETE', '/links/' + el.dataset.id);
+    toast(r.deactivated ? 'لینک پرداخت دارد؛ فقط غیرفعال شد' : 'لینک حذف شد');
+    await reload();
+  },
+  async tgConnect(el) {
+    const id = Number(el.dataset.id);
+    const c = await api('POST', `/merchants/${id}/telegram/connect`, {});
+    state.tgConnect = { merchantId: id, ...c };
+    if (c.link) window.open(c.link, '_blank', 'noopener');
+    await reload();
+    // Watch for the chat to appear (the bot receives /start <code>).
+    clearInterval(state.tgWatch);
+    const before = state.tgCount;
+    state.tgWatch = setInterval(async () => {
+      if (state.tab !== 'merchant/' + id) return clearInterval(state.tgWatch);
+      try {
+        const { channels } = await api('GET', `/merchants/${id}/telegram`);
+        if (channels.length > before) {
+          clearInterval(state.tgWatch);
+          state.tgConnect = null;
+          toast('تلگرام وصل شد ✓');
+          await reload();
+        }
+      } catch { /* keep watching */ }
+    }, 3000);
+  },
+  async tgTest(el) {
+    await api('POST', `/telegram/${el.dataset.id}/test`, {});
+    toast('پیام آزمایشی ارسال شد');
+  },
+  async tgDelete(el) {
+    if (!confirm('اعلان به این گفتگو قطع شود؟')) return;
+    await api('DELETE', '/telegram/' + el.dataset.id);
+    await reload();
+  },
   async merchantActive(el) {
     await api('PATCH', '/merchants/' + el.dataset.id, { active: el.dataset.active === '1' });
     await reload();
@@ -677,6 +771,14 @@ const actions = {
 const forms = {
   async testTx(d) {
     state.flash.tx = await api('POST', '/transactions', { amount: numOrNull(d.amount), merchant_id: numOrNull(d.merchant_id) });
+    await reload();
+  },
+  async createLink(d, form) {
+    const { link } = await api('POST', `/merchants/${form.dataset.id}/links`, {
+      title: d.title, amount: numOrNull(d.amount), ask_payer: d.ask_payer === 'on',
+    });
+    await copy(link.url);
+    toast('لینک ساخته و کپی شد');
     await reload();
   },
   async createMerchant(d) {

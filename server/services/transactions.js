@@ -8,6 +8,7 @@ import { detectBank, identifyCard } from '../bankDetect.js';
 import { ApiError, httpUrl, iso, positiveInt, sha256, tehranDayStart } from '../util.js';
 import { enqueueWebhook } from './webhooks.js';
 import { merchantCards } from './merchants.js';
+import { notifyHeld, notifyPaid } from './telegram.js';
 
 const ID_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 const newTxId = () =>
@@ -247,9 +248,11 @@ export function ingestMessage(user, device, input = {}) {
     // dashboard). A named card is the stronger signal, so it is checked first.
     const txCard = q('SELECT id, bank_code FROM cards WHERE id = ?').get(t.card_id);
     if (cardId && cardId !== txCard.id) {
+      notifyHeld(t, 'card_mismatch');
       return finish({ matched: false, amount: parsed.amount, reason: 'card_mismatch', transaction_id: t.id });
     }
     if (!cardId && bank && txCard.bank_code !== 'unknown' && bank !== txCard.bank_code) {
+      notifyHeld(t, 'bank_mismatch');
       return finish({ matched: false, amount: parsed.amount, reason: 'bank_mismatch', transaction_id: t.id });
     }
 
@@ -264,6 +267,7 @@ function markPaid(t, eventId, now = Date.now()) {
   q('UPDATE events SET tx_id = ? WHERE id = ?').run(t.id, eventId);
   const paid = q('SELECT * FROM transactions WHERE id = ?').get(t.id);
   enqueueWebhook(paid, 'transaction.paid', publicTx(paid));
+  notifyPaid(paid);
 }
 
 /**

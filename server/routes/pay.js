@@ -2,8 +2,23 @@
 import { q } from '../db.js';
 import { bankInfo } from '../banks.js';
 import { ApiError, iso, rateLimit } from '../util.js';
+import { publicLink, startLinkPayment } from '../services/links.js';
 
 export default async function payRoutes(app) {
+  // Payment links (/l/<slug>): show the link, then start a transaction for the payer.
+  app.get('/link/:slug', async (req, reply) => {
+    rateLimit('link:' + req.ip, 240, 60_000);
+    reply.header('cache-control', 'no-store');
+    return publicLink(req.params.slug);
+  });
+  app.post('/link/:slug', async (req) => {
+    // Each start reserves a unique amount and card capacity until it expires: keep it modest.
+    rateLimit('linkstart:' + req.ip, 15, 3600_000);
+    rateLimit('linkstart:' + req.params.slug, 300, 3600_000);
+    const t = startLinkPayment(req.params.slug, req.body ?? {});
+    return { id: t.id, payment_url: `/pay/${t.id}` };
+  });
+
   app.get('/:id', async (req, reply) => {
     rateLimit('pay:' + req.ip, 240, 60_000);
     const t = q('SELECT * FROM transactions WHERE id = ?').get(req.params.id);

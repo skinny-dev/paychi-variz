@@ -12,6 +12,7 @@ import deviceRoutes from './routes/device.js';
 import payRoutes from './routes/pay.js';
 import { expireTransactions } from './services/transactions.js';
 import { processDueWebhooks } from './services/webhooks.js';
+import { startTelegram, stopTelegram } from './services/telegram.js';
 
 if (config.production) {
   if (!config.baseUrl.startsWith('https://')) {
@@ -47,6 +48,7 @@ await app.register(fastifyStatic, { root: fileURLToPath(new URL('../public', imp
 app.get('/dashboard', (req, reply) => reply.sendFile('app.html'));
 app.get('/pay/:id', (req, reply) => reply.sendFile('pay.html'));
 app.get('/connect', (req, reply) => reply.sendFile('connect.html'));
+app.get('/l/:slug', (req, reply) => reply.sendFile('link.html'));
 app.get('/healthz', async () => {
   q('SELECT 1').get();
   return { ok: true };
@@ -78,6 +80,7 @@ tick(processDueWebhooks, 2000);
 tick(() => {
   q('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
   q('DELETE FROM pairing_codes WHERE expires_at < ?').run(Date.now());
+  q('DELETE FROM notify_codes WHERE expires_at < ?').run(Date.now());
 }, 3600_000);
 
 // Graceful stop (docker stop / redeploy sends SIGTERM): finish open requests, close SQLite.
@@ -87,6 +90,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
     if (stopping) return;
     stopping = true;
     const force = setTimeout(() => process.exit(1), 10_000).unref();
+    stopTelegram();
     try {
       await app.close();
       db.close();
@@ -98,4 +102,5 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
 }
 
 await app.listen({ port: config.port, host: process.env.HOST || '0.0.0.0' });
+startTelegram();
 console.log(`Paychi listening on port ${config.port}, public address ${config.baseUrl}`);

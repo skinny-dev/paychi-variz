@@ -21,6 +21,9 @@ export const config = {
   apkUrl: process.env.APK_URL || '',
   // When set, signing up needs this invite code (keeps a private deployment private).
   signupCode: process.env.SIGNUP_CODE || '',
+  // Telegram payment alerts (optional). API base can be a relay / proxy if Telegram is unreachable.
+  telegramToken: process.env.TELEGRAM_BOT_TOKEN || '',
+  telegramApiBase: (process.env.TELEGRAM_API_BASE || 'https://api.telegram.org').replace(/\/+$/, ''),
   production: process.env.NODE_ENV === 'production',
   allowPrivateWebhooks:
     process.env.ALLOW_PRIVATE_WEBHOOKS === '1' || process.env.NODE_ENV !== 'production',

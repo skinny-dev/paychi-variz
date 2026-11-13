@@ -61,10 +61,20 @@ runs the end-to-end test (`test/e2e.mjs`) against a temporary database.
    merchant's deposits), so unique amounts are unique across the account's merchants. A new
    account starts with one merchant; accounts from before merchants existed had their key and
    webhook moved into it, so existing integrations keep working.
-6. **Device** – install the Android app and sign in with the same phone number and password
+6. **Payment links (no code)** – on a merchant's page, create a link (`/l/<slug>`, with QR) with a
+   fixed amount or one the payer enters (optional min / max), optionally asking the payer's name +
+   phone. Share it on Instagram / Telegram / a site; the payer gets a normal unique-amount
+   transaction of that merchant. Payer details are in the transaction's `metadata`.
+   **Telegram alerts:** with `TELEGRAM_BOT_TOKEN` set, «اتصال تلگرام» on a merchant's page opens
+   `t.me/<bot>?start=<code>`; one tap on Start connects that chat (or group) and every paid
+   transaction, and every deposit held for manual confirmation, is posted there. The bot uses long
+   polling (no public webhook). `TELEGRAM_API_BASE` can point at a relay / proxy when the server
+   cannot reach `api.telegram.org` (often the case on servers in Iran). One bot token can only be
+   polled by one server at a time, so use separate bots for local and production.
+7. **Device** – install the Android app and sign in with the same phone number and password
    as the dashboard; the phone pairs itself. Developers (and the iOS Shortcut) can instead
    create a device token in the "API" tab.
-7. **API key + webhook** – per merchant, in dashboard → فروشگاه‌ها; integrate.
+8. **API key + webhook** – per merchant, in dashboard → فروشگاه‌ها; integrate.
 
 ## JavaScript SDK
 

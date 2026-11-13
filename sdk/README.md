@@ -81,6 +81,11 @@ const bot  = new Variz({ apiKey: process.env.BOT_KEY,  baseUrl });
 await bot.merchant.get();   // { id: 2, name: 'ربات تلگرام', website: null }
 ```
 
+**No-code option:** merchants without a backend can use payment links (`/l/<slug>`, created on the
+merchant's page) and Telegram alerts instead of the API. Link payments are ordinary transactions
+of the merchant: they show up in `transactions.list`, fire webhooks, and carry
+`metadata.payment_link` (plus `payer_name` / `payer_phone` when the link asks for them).
+
 ## How a payment works
 
 1. You create a transaction for an amount. Paychi returns a **unique id** and a **unique amount**

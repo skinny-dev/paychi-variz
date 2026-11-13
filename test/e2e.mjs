@@ -47,10 +47,35 @@ const hookServer = createServer((req, res) => {
   });
 }).listen(HOOK_PORT);
 
+// ---- fake Telegram Bot API ----
+const TG_PORT = 3989;
+const tgSent = [];
+const tgQueue = [];
+let tgUpdateId = 0;
+const tgServer = createServer((req, res) => {
+  let body = '';
+  req.on('data', (c) => (body += c));
+  req.on('end', async () => {
+    const method = req.url.split('/').pop();
+    const json = body ? JSON.parse(body) : {};
+    const reply = (result) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, result }));
+    if (!req.url.startsWith('/botTEST-TOKEN/')) return res.writeHead(401).end('{"ok":false,"description":"Unauthorized"}');
+    if (method === 'getMe') return reply({ id: 1, is_bot: true, username: 'paychi_test_bot' });
+    if (method === 'sendMessage') { tgSent.push(json); return reply({ message_id: tgSent.length }); }
+    if (method === 'getUpdates') {
+      const until = Date.now() + 300;
+      while (!tgQueue.length && Date.now() < until) await sleep(50);
+      return reply(tgQueue.splice(0).filter((u) => u.update_id >= (json.offset || 0)));
+    }
+    res.writeHead(404).end('{"ok":false}');
+  });
+}).listen(TG_PORT);
+
 const server = spawn(process.execPath, ['server/index.js'], {
   env: {
     ...process.env, PORT: String(PORT), BASE_URL: BASE, DB_PATH: join(dir, 'test.db'),
     BILLING_MODE: 'mock', TX_MIN_TTL_SEC: '1', GRACE_SEC: '0', ALLOW_PRIVATE_WEBHOOKS: '1',
+    TELEGRAM_BOT_TOKEN: 'TEST-TOKEN', TELEGRAM_API_BASE: `http://127.0.0.1:${TG_PORT}`,
   },
   stdio: ['ignore', 'inherit', 'inherit'],
 });
@@ -377,6 +402,57 @@ try {
   const list = (await call('GET', '/api/dash/merchants')).json.merchants;
   assert.deepEqual(list.map((m) => [m.name, m.active]), [['فروشگاه اصلی', true], ['Bot', false]]);
   ok('merchants: own key/webhook/cards, API isolation, shared unique amounts, archive/delete');
+  // payment links: fixed amount + payer info, open amount with range, deactivate
+  const pubLink = (slug) => call('GET', '/api/pay/link/' + slug, undefined, { cookie: '' });
+  const startLink = (slug, b) => call('POST', '/api/pay/link/' + slug, b, { cookie: '' });
+  const lk = (await call('POST', `/api/dash/merchants/${shop.id}/links`, { title: 'اشتراک ماهانه', amount: 333_000, ask_payer: true })).json.link;
+  assert.match(lk.url, /\/l\/[a-z0-9]{8}$/);
+  assert.ok(lk.qr_svg.startsWith('<svg'));
+  assert.equal((await fetch(lk.url)).status, 200);
+  assert.deepEqual(
+    (({ title, amount, ask_payer, active, merchant_name }) => ({ title, amount, ask_payer, active, merchant_name }))((await pubLink(lk.slug)).json),
+    { title: 'اشتراک ماهانه', amount: 333_000, ask_payer: true, active: true, merchant_name: 'فروشگاه اصلی' });
+  assert.equal((await startLink(lk.slug, {})).json.error.code, 'payer_required');
+  const ls = (await startLink(lk.slug, { payer_name: 'مریم', payer_phone: '۰۹۱۲ ۰۰۰ ۱۱۱۱' })).json;
+  assert.match(ls.payment_url, /^\/pay\/tx_/);
+  const ltx = (await api('GET', '/transactions/' + ls.id)).json;
+  assert.deepEqual([ltx.amount, ltx.description, ltx.metadata.payer_name, ltx.metadata.payer_phone], [333_000, 'اشتراک ماهانه', 'مریم', '09120001111']);
+  const open = (await call('POST', `/api/dash/merchants/${shop.id}/links`, { title: 'حمایت', min_amount: 50_000, max_amount: 100_000 })).json.link;
+  assert.equal((await startLink(open.slug, { amount: 10 })).json.error.code, 'invalid_amount');
+  const os = (await startLink(open.slug, { amount: '۸۰,۰۰۰' })).json;
+  assert.equal((await api('GET', '/transactions/' + os.id)).json.amount, 80_000);
+  await call('PATCH', `/api/dash/links/${open.id}`, { active: false });
+  assert.equal((await pubLink(open.slug)).json.active, false);
+  assert.equal((await startLink(open.slug, { amount: 80_000 })).status, 410);
+  assert.equal((await call('GET', '/api/pay/link/nope1234', undefined, { cookie: '' })).status, 404);
+  await api('POST', `/transactions/${os.id}/cancel`, {});
+  ok('payment links: fixed / open amount, payer info, range check, deactivate');
+
+  // Telegram alerts: one-tap connect via /start <code>, then a message per payment
+  const tgInfo = await waitFor(async () => {
+    const j = (await call('GET', `/api/dash/merchants/${shop.id}/telegram`)).json;
+    return j.bot ? j : null;
+  });
+  assert.deepEqual([tgInfo.enabled, tgInfo.bot, tgInfo.channels.length], [true, 'paychi_test_bot', 0]);
+  const tc = (await call('POST', `/api/dash/merchants/${shop.id}/telegram/connect`, {})).json;
+  assert.equal(tc.link, `https://t.me/paychi_test_bot?start=${tc.code}`);
+  const tgMsg = (text) => tgQueue.push({ update_id: ++tgUpdateId, message: { chat: { id: 555, type: 'private', first_name: 'Ali' }, text } });
+  tgMsg('/start not-a-valid-code');
+  await waitFor(() => tgSent.find((m) => m.text.includes('معتبر نیست')));
+  tgMsg('/start ' + tc.code);
+  await waitFor(() => tgSent.find((m) => m.text.includes('وصل شد')));
+  const chans = (await call('GET', `/api/dash/merchants/${shop.id}/telegram`)).json.channels;
+  assert.deepEqual(chans.map((c) => [c.chat_id, c.title]), [['555', 'Ali']]);
+  tgMsg('/start ' + tc.code); // single use
+  await waitFor(() => tgSent.filter((m) => m.text.includes('معتبر نیست')).length === 2);
+  d = (await dev('POST', '/ingest', { type: 'sms', sender: '98200030', body: sms(ltx.amount) })).json;
+  assert.deepEqual([d.matched, d.transaction_id], [true, ltx.id]);
+  const paidMsg = await waitFor(() => tgSent.find((m) => m.text.startsWith('✅ پرداخت دریافت شد')));
+  assert.equal(paidMsg.chat_id, '555');
+  assert.ok(paidMsg.text.includes('مریم') && paidMsg.text.includes('اشتراک ماهانه') && paidMsg.text.includes(ltx.id));
+  assert.equal((await call('POST', `/api/dash/telegram/${chans[0].id}/test`, {})).status, 200);
+  assert.equal((await call('GET', `/api/dash/merchants/${shop.id}/links`)).json.links.find((l) => l.id === lk.id).paid, 1);
+  ok('Telegram: one-tap connect, invalid / reused code rejected, payment alert with payer details');
   console.log(`\nAll ${passed} checks passed.`);
 } catch (e) {
   console.error('\nFAILED:', e);
@@ -384,6 +460,7 @@ try {
 } finally {
   server.kill();
   hookServer.close();
+  tgServer.close();
   await sleep(300);
   try { rmSync(dir, { recursive: true, force: true }); } catch {}
 }
