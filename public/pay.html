@@ -74,6 +74,7 @@
     root.innerHTML = `
       <div class="card">
         <div class="center">
+          ${tx.merchant_name ? `<div style="font-weight:600;margin-bottom:4px">${esc(tx.merchant_name)}</div>` : ''}
           <div class="muted small">${esc(tx.description || 'مبلغ قابل پرداخت')}</div>
           <div class="amount">${fa(tx.amount)} <small>ریال</small></div>
           <div class="muted small">معادل ${fa(Math.floor(tx.amount / 10))} تومان${tx.amount % 10 ? ` و ${fa(tx.amount % 10)} ریال` : ''}</div>

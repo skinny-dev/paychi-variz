@@ -133,9 +133,12 @@ try {
   d = (await dev0({ type: 'sms', sender: 'AnyBank', body: 'واریز 123,459' })).json;
   assert.deepEqual([d.accepted, d.reason], [false, 'source_not_allowed']);
   ok('sources: both on by default, mobile senders rejected, optional strict list');
-  const apiKey = (await call('POST', '/api/dash/api-key/rotate', {})).json.api_key;
-  me = (await call('PATCH', '/api/dash/settings', { webhook_url: `http://127.0.0.1:${HOOK_PORT}/hook` })).json;
-  const secret = me.settings.webhook_secret;
+  // a new account starts with one merchant; key + webhook are per merchant
+  const shop = (await call('GET', '/api/dash/me')).json.merchants[0];
+  assert.equal(shop.name, 'فروشگاه اصلی');
+  const apiKey = (await call('POST', `/api/dash/merchants/${shop.id}/api-key`, {})).json.api_key;
+  const secret = (await call('PATCH', `/api/dash/merchants/${shop.id}`, { webhook_url: `http://127.0.0.1:${HOOK_PORT}/hook` }))
+    .json.merchant.webhook_secret;
   const api = (m, p, b) => call(m, '/api/v1' + p, b, { authorization: 'Bearer ' + apiKey, cookie: '' });
   const dev = (m, p, b) => call(m, '/api/device' + p, b, { authorization: 'Bearer ' + devToken, cookie: '' });
   assert.equal((await call('POST', '/api/v1/transactions', { amount: 500000 }, { authorization: 'Bearer nope' })).status, 401);
@@ -333,6 +336,47 @@ try {
   const over = (await call('GET', '/api/dash/sender-banks')).json.sender_banks.find((x) => x.sender === '30002');
   assert.deepEqual([over.bank_code, over.auto], ['saman', false]);
   ok('bank/card identification: SMS + notifications, mismatch held back, manual confirm, learned + manual sender banks, account number');
+  // merchants: many per account, own key / webhook / cards, isolated API, shared unique amounts
+  const bot = (await call('POST', '/api/dash/merchants', { name: 'Bot', webhook_url: `http://127.0.0.1:${HOOK_PORT}/bot` })).json.merchant;
+  assert.equal((await call('POST', '/api/dash/merchants', { name: '  ' })).status, 400);
+  const botKey = (await call('POST', `/api/dash/merchants/${bot.id}/api-key`, {})).json.api_key;
+  r = await call('PATCH', `/api/dash/merchants/${bot.id}`, { all_cards: false, card_ids: [cardA.id] });
+  assert.deepEqual([r.json.merchant.all_cards, r.json.merchant.card_ids], [false, [cardA.id]]);
+  assert.equal((await call('PATCH', `/api/dash/merchants/${bot.id}`, { card_ids: [999999] })).status, 400);
+  const botApi = (m, p, b) => call(m, '/api/v1' + p, b, { authorization: 'Bearer ' + botKey, cookie: '' });
+  assert.equal((await botApi('GET', '/merchant')).json.name, 'Bot');
+  assert.deepEqual((await botApi('GET', '/cards')).json.data.map((c) => c.id), [cardA.id]);
+  const mt1 = (await botApi('POST', '/transactions', { amount: 222_000, order_id: 'BOT-1' })).json;
+  assert.deepEqual([mt1.card.id, mt1.merchant.name, mt1.amount], [cardA.id, 'Bot', 222_000]);
+  assert.equal((await botApi('POST', '/transactions', { amount: 222_000, card_id: cardB.id })).json.error.code, 'card_not_found');
+  // same amount from the other merchant gets the next unique amount (one phone sees both)
+  const mt2 = (await api('POST', '/transactions', { amount: 222_000, order_id: 'SHOP-1' })).json;
+  assert.equal(mt2.amount, 222_001);
+  assert.equal(mt2.merchant.id, shop.id);
+  // each key sees only its own merchant's transactions
+  assert.equal((await api('GET', '/transactions/' + mt1.id)).status, 404);
+  assert.equal((await api('POST', `/transactions/${mt1.id}/cancel`, {})).status, 404);
+  assert.deepEqual((await botApi('GET', '/transactions')).json.data.map((t) => t.id), [mt1.id]);
+  assert.deepEqual((await call('GET', `/api/dash/transactions?merchant_id=${bot.id}`)).json.transactions.map((t) => t.id), [mt1.id]);
+  // payment → webhook to the merchant's own URL, signed with its own secret
+  hooks.length = 0;
+  d = (await dev('POST', '/ingest', { type: 'sms', sender: '98200030', body: sms(mt1.amount) })).json;
+  assert.deepEqual([d.matched, d.transaction_id], [true, mt1.id]);
+  const botHook = await waitFor(() => hooks.find((h) => h.body.includes(mt1.id)));
+  assert.equal(JSON.parse(botHook.body).data.merchant.id, bot.id);
+  const botEvent = await verifyWebhook(botHook.body, botHook.headers['x-paychi-signature'], bot.webhook_secret);
+  assert.equal(botEvent.event, 'transaction.paid');
+  await assert.rejects(verifyWebhook(botHook.body, botHook.headers['x-paychi-signature'], secret));
+  assert.equal((await call('GET', '/api/pay/' + mt1.id)).json.merchant_name, 'Bot');
+  await api('POST', `/transactions/${mt2.id}/cancel`, {});
+  // a merchant with transactions is archived (key revoked); an empty one is deleted
+  assert.deepEqual((await call('DELETE', `/api/dash/merchants/${bot.id}`, {})).json, { archived: true });
+  assert.equal((await botApi('GET', '/merchant')).status, 401);
+  const tmp = (await call('POST', '/api/dash/merchants', { name: 'Temp' })).json.merchant;
+  assert.deepEqual((await call('DELETE', `/api/dash/merchants/${tmp.id}`, {})).json, { archived: false });
+  const list = (await call('GET', '/api/dash/merchants')).json.merchants;
+  assert.deepEqual(list.map((m) => [m.name, m.active]), [['فروشگاه اصلی', true], ['Bot', false]]);
+  ok('merchants: own key/webhook/cards, API isolation, shared unique amounts, archive/delete');
   console.log(`\nAll ${passed} checks passed.`);
 } catch (e) {
   console.error('\nFAILED:', e);

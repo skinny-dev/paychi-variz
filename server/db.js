@@ -149,6 +149,61 @@ CREATE TABLE IF NOT EXISTS sender_banks (
 );
 `);
 
+// Merchants: an account (the phone owner) runs any number of merchants (shops, bots, sites).
+// Each merchant has its own API key, webhook and transactions, and uses all of the account's
+// cards (all_cards = 1) or a chosen subset (merchant_cards). Cards, listener phones, sources and
+// incoming messages stay per account, because one phone receives the deposits for every merchant.
+db.exec(`
+CREATE TABLE IF NOT EXISTS merchants (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  website TEXT,
+  api_key_hash TEXT UNIQUE,
+  api_key_prefix TEXT,
+  webhook_url TEXT,
+  webhook_secret TEXT NOT NULL,
+  tx_ttl_sec INTEGER,
+  all_cards INTEGER NOT NULL DEFAULT 1,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS merchants_user ON merchants (user_id);
+CREATE TABLE IF NOT EXISTS merchant_cards (
+  merchant_id INTEGER NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+  card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+  PRIMARY KEY (merchant_id, card_id)
+);
+`);
+if (!hasColumn('transactions', 'merchant_id')) {
+  db.exec('ALTER TABLE transactions ADD COLUMN merchant_id INTEGER REFERENCES merchants(id)');
+}
+if (!hasColumn('webhook_deliveries', 'merchant_id')) {
+  db.exec('ALTER TABLE webhook_deliveries ADD COLUMN merchant_id INTEGER');
+}
+db.exec('CREATE INDEX IF NOT EXISTS tx_merchant_created ON transactions (merchant_id, created_at)');
+// Accounts from before merchants existed: their API key, webhook and transactions become the
+// account's first merchant, so existing integrations keep working unchanged.
+for (const u of db.prepare(
+  'SELECT * FROM users WHERE NOT EXISTS (SELECT 1 FROM merchants m WHERE m.user_id = users.id)',
+).all()) {
+  db.exec('BEGIN');
+  try {
+    const m = db.prepare(
+      `INSERT INTO merchants (user_id, name, api_key_hash, api_key_prefix, webhook_url, webhook_secret, tx_ttl_sec, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(u.id, 'فروشگاه اصلی', u.api_key_hash, u.api_key_prefix, u.webhook_url, u.webhook_secret, u.tx_ttl_sec, Date.now());
+    const mid = Number(m.lastInsertRowid);
+    db.prepare('UPDATE transactions SET merchant_id = ? WHERE user_id = ? AND merchant_id IS NULL').run(mid, u.id);
+    db.prepare('UPDATE webhook_deliveries SET merchant_id = ? WHERE user_id = ? AND merchant_id IS NULL').run(mid, u.id);
+    db.prepare('UPDATE users SET api_key_hash = NULL, api_key_prefix = NULL WHERE id = ?').run(u.id);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
 const cache = new Map();
 /** Cached prepared statement. */
 export function q(sql) {

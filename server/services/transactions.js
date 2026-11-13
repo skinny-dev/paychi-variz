@@ -7,6 +7,7 @@ import { normalizeDigits, parseBankMessage } from '../parser.js';
 import { detectBank, identifyCard } from '../bankDetect.js';
 import { ApiError, httpUrl, iso, positiveInt, sha256, tehranDayStart } from '../util.js';
 import { enqueueWebhook } from './webhooks.js';
+import { merchantCards } from './merchants.js';
 
 const ID_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 const newTxId = () =>
@@ -48,6 +49,7 @@ export function publicCard(card, user) {
 
 export function publicTx(t) {
   const card = q('SELECT * FROM cards WHERE id = ?').get(t.card_id);
+  const merchant = t.merchant_id ? q('SELECT id, name FROM merchants WHERE id = ?').get(t.merchant_id) : null;
   const bank = bankInfo(card.bank_code);
   return {
     id: t.id,
@@ -55,6 +57,7 @@ export function publicTx(t) {
     amount: t.amount,
     requested_amount: t.requested_amount,
     currency: 'IRR',
+    merchant: merchant ? { id: merchant.id, name: merchant.name } : null,
     order_id: t.order_id,
     description: t.description,
     card: {
@@ -73,7 +76,11 @@ export function publicTx(t) {
   };
 }
 
-/** Smallest amount >= requested that no open / recently closed transaction of this user uses. */
+/**
+ * Smallest amount >= requested that no open / recently closed transaction of this account uses.
+ * Unique across all of the account's merchants: one phone receives every merchant's deposits and
+ * the amount is what tells them apart.
+ */
 function uniqueAmount(userId, requested, now) {
   const taken = new Set(
     q(
@@ -90,10 +97,8 @@ function uniqueAmount(userId, requested, now) {
   throw new ApiError(409, 'no_unique_amount', 'Too many open transactions with this amount; retry shortly');
 }
 
-function pickCard(user, amount, cardId) {
-  const cards = cardId
-    ? q('SELECT * FROM cards WHERE id = ? AND user_id = ? AND active = 1').all(cardId, user.id)
-    : q('SELECT * FROM cards WHERE user_id = ? AND active = 1').all(user.id);
+function pickCard(user, merchant, amount, cardId) {
+  const cards = merchantCards(merchant).filter((c) => c.active && (!cardId || c.id === cardId));
   if (!cards.length) {
     throw new ApiError(422, cardId ? 'card_not_found' : 'no_active_card', 'No active card available');
   }
@@ -112,12 +117,13 @@ function pickCard(user, amount, cardId) {
   return best.card;
 }
 
-export function createTransaction(user, input = {}) {
+export function createTransaction(user, merchant, input = {}) {
   const sub = requireSubscription(user.id);
+  if (!merchant.active) throw new ApiError(403, 'merchant_inactive', 'This merchant is deactivated');
   const requested = positiveInt(input.amount, 'amount', { min: config.minAmount, max: 10_000_000_000 });
   const ttl =
     input.ttl == null
-      ? Math.min(Math.max(user.tx_ttl_sec ?? config.txTtlSec, config.txMinTtlSec), config.txMaxTtlSec)
+      ? Math.min(Math.max(merchant.tx_ttl_sec ?? config.txTtlSec, config.txMinTtlSec), config.txMaxTtlSec)
       : positiveInt(input.ttl, 'ttl', { min: config.txMinTtlSec, max: config.txMaxTtlSec });
   const callbackUrl = httpUrl(input.callback_url, 'callback_url');
   const returnUrl = httpUrl(input.return_url, 'return_url');
@@ -141,27 +147,28 @@ export function createTransaction(user, input = {}) {
       }
     }
     const amount = uniqueAmount(user.id, requested, now);
-    const card = pickCard(user, amount, cardId);
+    const card = pickCard(user, merchant, amount, cardId);
     const id = newTxId();
     q(
       `INSERT INTO transactions
-         (id, user_id, card_id, requested_amount, amount, status, order_id, description,
+         (id, user_id, merchant_id, card_id, requested_amount, amount, status, order_id, description,
           callback_url, return_url, metadata, created_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, user.id, card.id, requested, amount, orderId, description, callbackUrl, returnUrl, metadata, now, now + ttl * 1000);
+       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, user.id, merchant.id, card.id, requested, amount, orderId, description, callbackUrl, returnUrl, metadata, now, now + ttl * 1000);
     return q('SELECT * FROM transactions WHERE id = ?').get(id);
   });
 }
 
-export function cancelTransaction(user, id) {
+/** Cancel a pending transaction of this merchant. */
+export function cancelTransaction(merchant, id) {
   const now = Date.now();
   const res = q(
-    `UPDATE transactions SET status = 'cancelled', ended_at = ? WHERE id = ? AND user_id = ? AND status = 'pending'`,
-  ).run(now, id, user.id);
-  const t = q('SELECT * FROM transactions WHERE id = ? AND user_id = ?').get(id, user.id);
+    `UPDATE transactions SET status = 'cancelled', ended_at = ? WHERE id = ? AND merchant_id = ? AND status = 'pending'`,
+  ).run(now, id, merchant.id);
+  const t = q('SELECT * FROM transactions WHERE id = ? AND merchant_id = ?').get(id, merchant.id);
   if (!t) throw new ApiError(404, 'not_found', 'Transaction not found');
   if (!res.changes) throw new ApiError(409, 'not_pending', `Transaction is already ${t.status}`);
-  enqueueWebhook(user, t, 'transaction.cancelled', publicTx(t));
+  enqueueWebhook(t, 'transaction.cancelled', publicTx(t));
   return t;
 }
 
@@ -174,8 +181,7 @@ export function expireTransactions() {
     const res = q(`UPDATE transactions SET status = 'expired', ended_at = ? WHERE id = ? AND status = 'pending'`)
       .run(now, t.id);
     if (!res.changes) continue;
-    const user = q('SELECT * FROM users WHERE id = ?').get(t.user_id);
-    enqueueWebhook(user, t, 'transaction.expired', publicTx({ ...t, status: 'expired' }));
+    enqueueWebhook(t, 'transaction.expired', publicTx({ ...t, status: 'expired' }));
   }
 }
 
@@ -247,17 +253,17 @@ export function ingestMessage(user, device, input = {}) {
       return finish({ matched: false, amount: parsed.amount, reason: 'bank_mismatch', transaction_id: t.id });
     }
 
-    markPaid(user, t, eventId, now);
+    markPaid(t, eventId, now);
     return finish({ matched: true, amount: parsed.amount, transaction_id: t.id });
   });
 }
 
-function markPaid(user, t, eventId, now = Date.now()) {
+function markPaid(t, eventId, now = Date.now()) {
   q(`UPDATE transactions SET status = 'paid', paid_at = ?, ended_at = ?, event_id = ? WHERE id = ?`)
     .run(now, now, eventId, t.id);
   q('UPDATE events SET tx_id = ? WHERE id = ?').run(t.id, eventId);
   const paid = q('SELECT * FROM transactions WHERE id = ?').get(t.id);
-  enqueueWebhook(user, paid, 'transaction.paid', publicTx(paid));
+  enqueueWebhook(paid, 'transaction.paid', publicTx(paid));
 }
 
 /**
@@ -296,7 +302,7 @@ export function confirmEvent(user, eventId, txId) {
       : q(`SELECT * FROM transactions WHERE user_id = ? AND status = 'pending' AND amount = ? ORDER BY created_at LIMIT 1`)
         .get(user.id, e.amount);
     if (!t) throw new ApiError(409, 'no_pending_transaction', 'تراکنش در انتظاری با این مبلغ وجود ندارد');
-    markPaid(user, t, e.id);
+    markPaid(t, e.id);
     q(`UPDATE events SET result = 'confirmed_manually' WHERE id = ?`).run(e.id);
     return q('SELECT * FROM transactions WHERE id = ?').get(t.id);
   });

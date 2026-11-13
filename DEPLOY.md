@@ -31,10 +31,12 @@ must be set:
 | `NODE_ENV` | `production` (already set in the image) |
 | `BASE_URL` | the public `https://…` address, no trailing slash |
 | `DB_PATH` | `/app/data/paychi.db` (already set in the image) |
-| `BILLING_MODE` | `mock` until real billing exists — anyone who signs up gets a plan |
+| `BILLING_MODE` | `off` for internal use: no plan needed, no limits (pricing comes later) |
+| `SIGNUP_CODE` | invite code needed to sign up; keeps strangers out of a private server |
 | `APK_URL` | only if the APK is not inside the image (see below) |
 
-On start, the server warns in the logs if `BASE_URL` is not https or billing is mock.
+On start, the server warns in the logs if `BASE_URL` is not https, or if sign-up is free and open
+(no `SIGNUP_CODE`).
 
 ## The Android APK
 

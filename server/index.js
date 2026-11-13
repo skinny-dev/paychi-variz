@@ -17,8 +17,8 @@ if (config.production) {
   if (!config.baseUrl.startsWith('https://')) {
     console.warn(`WARNING: BASE_URL is ${config.baseUrl}. Use the public https:// address in production (payment links, QR, secure cookies).`);
   }
-  if (config.billingMode === 'mock') {
-    console.warn('WARNING: BILLING_MODE=mock — any signed-up user gets a plan without paying.');
+  if (config.billingMode !== 'live' && !config.signupCode) {
+    console.warn(`WARNING: BILLING_MODE=${config.billingMode} and no SIGNUP_CODE — anyone can sign up and use it for free.`);
   }
 }
 

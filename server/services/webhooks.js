@@ -12,15 +12,16 @@ export function sign(secret, timestamp, body) {
 }
 
 /** Queue a webhook for a transaction event. `data` is the public transaction object. */
-export function enqueueWebhook(user, txRow, event, data) {
-  const url = txRow.callback_url || user.webhook_url;
+export function enqueueWebhook(txRow, event, data) {
+  const merchant = q('SELECT id, webhook_url FROM merchants WHERE id = ?').get(txRow.merchant_id);
+  const url = txRow.callback_url || merchant?.webhook_url;
   if (!url) return;
   const now = Date.now();
   const payload = JSON.stringify({ event, created_at: new Date(now).toISOString(), data });
   q(
-    `INSERT INTO webhook_deliveries (user_id, tx_id, event, url, payload, next_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(user.id, txRow.id, event, url, payload, now, now);
+    `INSERT INTO webhook_deliveries (user_id, merchant_id, tx_id, event, url, payload, next_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(txRow.user_id, txRow.merchant_id, txRow.id, event, url, payload, now, now);
   setImmediate(() => processDueWebhooks().catch(() => {}));
 }
 
@@ -51,7 +52,9 @@ async function assertAllowedTarget(url) {
 }
 
 async function deliver(d) {
-  const secret = q('SELECT webhook_secret FROM users WHERE id = ?').get(d.user_id)?.webhook_secret;
+  // Signed with the merchant's secret at send time, so a rotated secret applies to retries too.
+  const secret = q('SELECT webhook_secret FROM merchants WHERE id = ?').get(d.merchant_id)?.webhook_secret
+    ?? q('SELECT webhook_secret FROM users WHERE id = ?').get(d.user_id)?.webhook_secret;
   const ts = Math.floor(Date.now() / 1000);
   let code = null;
   let error = null;

@@ -1,6 +1,6 @@
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { q } from './db.js';
-import { planById } from './config.js';
+import { config, planById } from './config.js';
 import { ApiError, randomToken, sha256 } from './util.js';
 
 const SESSION_MS = 30 * 86_400_000;
@@ -50,12 +50,14 @@ export async function requireUser(req) {
   req.user = row;
 }
 
-/** preHandler: merchant API key (Authorization: Bearer pk_...). */
+/** preHandler: merchant API key (Authorization: Bearer pk_...). Sets req.merchant and its owner req.user. */
 export async function requireApiKey(req) {
   const key = bearer(req) || req.headers['x-api-key'];
-  const row = key && q('SELECT * FROM users WHERE api_key_hash = ?').get(sha256(String(key)));
-  if (!row) throw new ApiError(401, 'invalid_api_key', 'Missing or invalid API key');
-  req.user = row;
+  const merchant = key && q('SELECT * FROM merchants WHERE api_key_hash = ?').get(sha256(String(key)));
+  if (!merchant) throw new ApiError(401, 'invalid_api_key', 'Missing or invalid API key');
+  if (!merchant.active) throw new ApiError(403, 'merchant_inactive', 'This merchant is deactivated');
+  req.merchant = merchant;
+  req.user = q('SELECT * FROM users WHERE id = ?').get(merchant.user_id);
 }
 
 /** preHandler: listener device token (Authorization: Bearer dev_...). */
@@ -68,8 +70,12 @@ export async function requireDevice(req) {
   req.user = q('SELECT * FROM users WHERE id = ?').get(device.user_id);
 }
 
+/** With BILLING_MODE=off (internal use) every account has this plan: no fee, no limits. */
+const INTERNAL_PLAN = { id: 'internal', name: 'داخلی', price: 0, days: 0, maxCards: 1000, maxTxPerPeriod: null };
+
 /** Active subscription (with its plan) or null. */
 export function activeSubscription(userId) {
+  if (config.billingMode === 'off') return { plan: INTERNAL_PLAN, starts_at: 0, expires_at: null };
   const sub = q(
     'SELECT * FROM subscriptions WHERE user_id = ? AND expires_at > ? ORDER BY expires_at DESC LIMIT 1',
   ).get(userId, Date.now());

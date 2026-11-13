@@ -19,6 +19,8 @@ export const config = {
   amountCooldownSec: int('AMOUNT_COOLDOWN_SEC', 1800),
   minAmount: 10_000,
   apkUrl: process.env.APK_URL || '',
+  // When set, signing up needs this invite code (keeps a private deployment private).
+  signupCode: process.env.SIGNUP_CODE || '',
   production: process.env.NODE_ENV === 'production',
   allowPrivateWebhooks:
     process.env.ALLOW_PRIVATE_WEBHOOKS === '1' || process.env.NODE_ENV !== 'production',

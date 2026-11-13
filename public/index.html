@@ -43,6 +43,10 @@
           <label for="password">رمز عبور</label>
           <input id="password" class="ltr" type="password" minlength="8" autocomplete="current-password" required>
         </div>
+        <div class="field" id="code-field" hidden>
+          <label for="signup_code">کد دعوت</label>
+          <input id="signup_code" class="ltr" autocomplete="off">
+        </div>
         <p id="err" class="note" style="background:var(--error-container);color:var(--on-error-container)" hidden></p>
         <button class="btn block" id="submit">ورود</button>
       </form>
@@ -52,6 +56,8 @@
 <script>
   const $ = (s) => document.querySelector(s);
   let mode = 'login';
+  let codeRequired = false;
+  fetch('/api/dash/signup-info').then((r) => r.json()).then((j) => { codeRequired = j.code_required; }).catch(() => {});
   fetch('/api/dash/me').then((r) => { if (r.ok) location.href = '/dashboard'; });
 
   function setMode(m) {
@@ -59,6 +65,7 @@
     $('#tab-login').classList.toggle('on', m === 'login');
     $('#tab-register').classList.toggle('on', m === 'register');
     $('#name-field').hidden = m === 'login';
+    $('#code-field').hidden = m === 'login' || !codeRequired;
     $('#submit').textContent = m === 'login' ? 'ورود' : 'ساخت حساب';
     $('#password').autocomplete = m === 'login' ? 'current-password' : 'new-password';
     $('#err').hidden = true;
@@ -73,7 +80,7 @@
       const res = await fetch('/api/dash/' + mode, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ phone: $('#phone').value, password: $('#password').value, name: $('#name').value }),
+        body: JSON.stringify({ phone: $('#phone').value, password: $('#password').value, name: $('#name').value, signup_code: $('#signup_code').value }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error?.message || 'خطا');

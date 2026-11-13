@@ -39,7 +39,8 @@ runs the end-to-end test (`test/e2e.mjs`) against a temporary database.
 ## User flow
 
 1. **Plan** – pick a subscription plan (`server/config.js`). With `BILLING_MODE=mock` it activates
-   instantly without payment; real billing is not wired yet.
+   instantly without payment; with `BILLING_MODE=off` (internal use) no plan is needed and nothing
+   is limited. Real billing is not wired yet. `SIGNUP_CODE` makes sign-up require an invite code.
 2. **Cards** – enter card numbers; the bank is identified from the BIN (`server/banks.js`) and
    validated with Luhn.
 3. **Ceiling (سقف کارت به کارت)** – daily receive limit per card: system default
@@ -54,10 +55,16 @@ runs the end-to-end test (`test/e2e.mjs`) against a temporary database.
    package), and its **card** from a masked card or account number in the text
    (`server/bankDetect.js`). A message pointing to a different card or bank than the transaction
    with that amount is held back for manual confirmation in the dashboard.
-5. **Device** – install the Android app and sign in with the same phone number and password
+5. **Merchants** – one account runs any number of merchants (shops, bots, sites). Each has its
+   own API key, webhook URL + secret, payment window and transactions, and uses all cards or a
+   chosen subset. Cards, phones and incoming messages stay per account (one phone hears every
+   merchant's deposits), so unique amounts are unique across the account's merchants. A new
+   account starts with one merchant; accounts from before merchants existed had their key and
+   webhook moved into it, so existing integrations keep working.
+6. **Device** – install the Android app and sign in with the same phone number and password
    as the dashboard; the phone pairs itself. Developers (and the iOS Shortcut) can instead
    create a device token in the "API" tab.
-6. **API key + webhook** – integrate.
+7. **API key + webhook** – per merchant, in dashboard → فروشگاه‌ها; integrate.
 
 ## JavaScript SDK
 
@@ -71,7 +78,8 @@ npm install ../paychi-variz/sdk --install-links
 
 ## Merchant API
 
-Auth: `Authorization: Bearer pk_live_…`. Amounts are integer **Rial**.
+Auth: `Authorization: Bearer pk_live_…` (one key per merchant; it only sees that merchant's
+transactions). Amounts are integer **Rial**.
 
 | Method | Path | |
 |---|---|---|
@@ -79,7 +87,8 @@ Auth: `Authorization: Bearer pk_live_…`. Amounts are integer **Rial**.
 | GET | `/api/v1/transactions/:id` | status: `pending` / `paid` / `expired` / `cancelled` |
 | GET | `/api/v1/transactions?order_id=&status=&limit=` | list |
 | POST | `/api/v1/transactions/:id/cancel` | |
-| GET | `/api/v1/cards` | cards with limit and remaining capacity |
+| GET | `/api/v1/cards` | this merchant's cards with limit and remaining capacity |
+| GET | `/api/v1/merchant` | the merchant the key belongs to |
 
 Errors: `{ "error": { "code", "message" } }`.
 

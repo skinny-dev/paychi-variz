@@ -124,8 +124,13 @@ export class Variz {
     };
 
     this.cards = {
-      /** Cards with their daily card-to-card limit and what is left today. */
+      /** Cards this merchant receives payments on, with their daily limit and what is left today. */
       list: async ({ signal } = {}) => (await call('GET', '/cards', { signal })).data,
+    };
+
+    this.merchant = {
+      /** The merchant this API key belongs to: { id, name, website }. */
+      get: async ({ signal } = {}) => call('GET', '/merchant', { signal }),
     };
   }
 }

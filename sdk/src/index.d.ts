@@ -35,6 +35,8 @@ export interface Transaction {
   /** Amount you asked for, in Rial. */
   requested_amount: number;
   currency: 'IRR';
+  /** Merchant (shop / bot / site) the transaction belongs to: the owner of the API key. */
+  merchant: { id: number; name: string } | null;
   order_id: string | null;
   description: string | null;
   card: TransactionCard;
@@ -100,7 +102,7 @@ export interface Card {
 export class VarizError extends Error {
   /** HTTP status (0 for network errors and timeouts). */
   status: number;
-  /** API error code, e.g. "card_limit_reached", "subscription_required", "timeout", "network_error". */
+  /** API error code, e.g. "card_limit_reached", "merchant_inactive", "subscription_required", "timeout", "network_error". */
   code: string;
 }
 
@@ -115,8 +117,19 @@ export class Variz {
     waitForPayment(id: string, options?: WaitOptions): Promise<Transaction>;
   };
   cards: {
+    /** Cards this merchant receives payments on. */
     list(options?: RequestOptions): Promise<Card[]>;
   };
+  merchant: {
+    /** The merchant this API key belongs to. */
+    get(options?: RequestOptions): Promise<Merchant>;
+  };
+}
+
+export interface Merchant {
+  id: number;
+  name: string;
+  website: string | null;
 }
 export default Variz;
 

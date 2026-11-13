@@ -17,6 +17,7 @@ export default async function payRoutes(app) {
       status: t.status,
       amount: t.amount,
       description: t.description,
+      merchant_name: t.merchant_id ? q('SELECT name FROM merchants WHERE id = ?').get(t.merchant_id)?.name ?? null : null,
       // Card details are only exposed while the transaction is payable.
       card: open
         ? { number: card.number, holder_name: card.holder_name, bank: bank.code, bank_name: bank.name, colors: bank.colors }

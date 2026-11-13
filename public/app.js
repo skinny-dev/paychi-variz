@@ -1,7 +1,7 @@
 // Dashboard SPA (no build step). All user-provided text goes through esc().
 const $ = (s, el = document) => el.querySelector(s);
 const main = $('#main');
-const state = { me: null, banks: null, tab: 'overview', flash: {}, txFilter: '' };
+const state = { me: null, banks: null, tab: 'overview', flash: {}, txFilter: '', txMerchant: '' };
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -67,6 +67,10 @@ const bankCard = (number, holder, { off = false } = {}) => {
   </div>`;
 };
 const head = (title, extra = '') => `<div class="head"><h1>${esc(title)}</h1><div class="row">${extra}</div></div>`;
+const merchantOptions = (selected, { all = false } = {}) =>
+  (all ? `<option value="">همه فروشگاه‌ها</option>` : '')
+  + state.me.merchants.filter((m) => m.active || String(m.id) === String(selected))
+    .map((m) => `<option value="${m.id}" ${String(m.id) === String(selected) ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
 const needPlan = () =>
   state.me.subscription ? '' : `<div class="note warn">برای ادامه ابتدا یک پلن اشتراک فعال کنید. <a href="#plan">انتخاب پلن</a></div>`;
 
@@ -152,6 +156,17 @@ function eventResult(e) {
     + (canConfirm ? `<div style="margin-top:6px"><button class="btn tonal sm" data-act="confirmEvent" data-id="${e.id}">تأیید دستی</button></div>` : '');
 }
 
+const STATUS_OK = (d) => `${badge(d.status)} <span class="small muted ltr">${esc(d.last_error || d.last_code || '')}</span>`;
+function deliveriesTable(deliveries, { merchant = true } = {}) {
+  if (!deliveries.length) return `<div class="empty">هنوز وب‌هوکی ارسال نشده است.</div>`;
+  return `<div class="tablewrap"><table><tr><th>زمان</th>${merchant ? '<th>فروشگاه</th>' : ''}<th>رویداد</th><th>تراکنش</th><th>آدرس</th><th>تلاش</th><th>وضعیت</th></tr>
+    ${deliveries.map((d) => `<tr><td class="nowrap small">${date(d.created_at)}</td>
+      ${merchant ? `<td class="small">${esc(d.merchant_name || '—')}</td>` : ''}
+      <td class="ltr mono small">${esc(d.event)}</td><td class="ltr mono small">${esc(d.tx_id)}</td>
+      <td class="ltr small">${esc(d.url)}</td><td>${fa(d.attempts)}</td><td>${STATUS_OK(d)}</td></tr>`).join('')}</table></div>`;
+}
+const last4 = (n) => String(n).slice(-4);
+
 // ------------------------------------------------------------------ views
 const views = {
   async overview() {
@@ -159,18 +174,21 @@ const views = {
     const c = me.counts;
     const sub = me.subscription;
     const pair = c.devices === 0 ? await ensurePair() : null;
+    const internal = me.billing_mode === 'off';
     const steps = [
-      [!!sub, 'انتخاب پلن اشتراک', 'plan'],
+      ...(internal ? [] : [[!!sub, 'انتخاب پلن اشتراک', 'plan']]),
       [c.cards > 0, 'ثبت شماره کارت', 'cards'],
       [c.devices > 0, 'اتصال گوشی (اندروید یا شورتکات iOS)', 'listen'],
-      [!!me.settings.api_key_prefix, 'ساخت کلید API و تنظیم وب‌هوک', 'dev'],
+      [me.merchants.some((m) => m.api_key_prefix), 'ساخت فروشگاه، کلید API و وب‌هوک', 'merchants'],
     ];
     return `${head('نمای کلی')}
       <div class="grid g4" style="margin-bottom:16px">
         <div class="stat"><b>${fa(c.paid)}</b><span>تراکنش موفق</span></div>
         <div class="stat"><b>${toman(c.paid_sum)}</b><span>مجموع دریافتی</span></div>
         <div class="stat"><b>${fa(c.pending)}</b><span>در انتظار پرداخت</span></div>
-        <div class="stat"><b>${sub ? esc(sub.plan.name) : '—'}</b><span>${sub ? `اعتبار تا ${date(sub.expires_at)}` : 'بدون اشتراک'}</span></div>
+        ${internal
+          ? `<div class="stat"><b>${fa(me.merchants.filter((m) => m.active).length)}</b><span>فروشگاه فعال</span></div>`
+          : `<div class="stat"><b>${sub ? esc(sub.plan.name) : '—'}</b><span>${sub ? `اعتبار تا ${date(sub.expires_at)}` : 'بدون اشتراک'}</span></div>`}
       </div>
       ${pair ? `<div class="card"><h2>اتصال سریع گوشی</h2>${quickConnect(pair)}</div>` : ''}
       <div class="grid g2">
@@ -181,6 +199,7 @@ const views = {
         <div class="card"><h2>تراکنش آزمایشی</h2>
           <p class="muted small">یک تراکنش بسازید و صفحه پرداخت را ببینید (همان کاری که API انجام می‌دهد).</p>
           <form data-form="testTx" class="row">
+            <div class="field"><label>فروشگاه</label><select name="merchant_id">${merchantOptions('')}</select></div>
             <div class="field"><label>مبلغ (ریال)</label><input name="amount" class="ltr" inputmode="numeric" value="1500000" required></div>
             <button class="btn" >ساخت تراکنش</button>
           </form>
@@ -193,6 +212,9 @@ const views = {
   async plan() {
     const { plans, billing_mode: mode } = await api('GET', '/plans');
     const sub = state.me.subscription;
+    if (mode === 'off') {
+      return `${head('اشتراک')}<div class="note">این نسخه برای استفاده داخلی است: اشتراک لازم نیست و محدودیتی ندارد.</div>`;
+    }
     return `${head('اشتراک')}
       ${mode === 'mock' ? `<div class="note warn">حالت آزمایشی: پلن بدون پرداخت و فوری فعال می‌شود.</div>` : ''}
       ${sub ? `<div class="note">پلن فعال: <b>${esc(sub.plan.name)}</b> — تا ${date(sub.expires_at)} —
@@ -358,15 +380,136 @@ const views = {
       </div>`;
   },
 
+  async merchants() {
+    const { merchants } = await api('GET', '/merchants');
+    const shown = merchants.filter((m) => m.active || state.showArchived);
+    const archived = merchants.length - merchants.filter((m) => m.active).length;
+    return `${head('فروشگاه‌ها')}
+      <p class="muted small">هر فروشگاه (سایت، ربات، اپ) کلید API، وب‌هوک و تراکنش‌های جدا دارد.
+        کارت‌ها و گوشی شنونده مشترک‌اند: یک گوشی واریزهای همه فروشگاه‌ها را تشخیص می‌دهد و مبلغ یکتا بین همه فروشگاه‌ها یکتاست.</p>
+      <div class="card"><h2>فروشگاه جدید</h2>
+        <form data-form="createMerchant" class="row">
+          <div class="field"><label>نام</label><input name="name" required maxlength="80" placeholder="مثلاً فروشگاه آنلاین"></div>
+          <div class="field"><label>آدرس سایت (اختیاری)</label><input name="website" class="ltr" placeholder="https://shop.example.ir"></div>
+          <button class="btn">ساخت فروشگاه</button>
+        </form>
+      </div>
+      <div class="grid g2">${shown.map((m) => `
+        <div class="card">
+          <div class="spread"><h2 style="margin:0">${esc(m.name)}</h2>${m.active ? '' : '<span class="badge cancelled">بایگانی</span>'}</div>
+          ${m.website ? `<div class="small ltr muted">${esc(m.website)}</div>` : ''}
+          <div class="row small" style="margin:10px 0;gap:14px">
+            <span><b>${fa(m.stats.paid)}</b> موفق</span>
+            <span><b>${fa(m.stats.pending)}</b> در انتظار</span>
+            <span>دریافتی: <b>${toman(m.stats.paid_sum)}</b></span>
+          </div>
+          <div class="small">${m.api_key_prefix ? `کلید API: <code class="inline">${esc(m.api_key_prefix)}…</code>` : '<span class="muted">کلید API ساخته نشده</span>'}
+            · ${m.webhook_url ? 'وب‌هوک ✓' : '<span class="muted">بدون وب‌هوک</span>'}
+            · ${m.all_cards ? 'همه کارت‌ها' : `${fa(m.card_ids.length)} کارت`}</div>
+          <a class="btn tonal sm" style="margin-top:12px" href="#merchant/${m.id}">مدیریت</a>
+        </div>`).join('')}</div>
+      ${archived ? `<button class="btn ghost sm" data-act="toggleArchived">${state.showArchived ? 'پنهان کردن' : 'نمایش'} ${fa(archived)} فروشگاه بایگانی‌شده</button>` : ''}`;
+  },
+
+  async merchant(id) {
+    const [{ merchant: m }, { cards }, { transactions }, { deliveries }] = await Promise.all([
+      api('GET', '/merchants/' + id), api('GET', '/cards'),
+      api('GET', `/transactions?merchant_id=${id}`), api('GET', `/webhooks?merchant_id=${id}`),
+    ]);
+    const { defaults, base_url: base } = state.me;
+    const key = state.flash.apiKey?.merchantId === m.id ? state.flash.apiKey.key : null;
+    const sel = new Set(m.card_ids);
+    return `${head(m.name, `<a class="btn ghost sm" href="#merchants">همه فروشگاه‌ها</a>`)}
+      ${m.active ? '' : `<div class="note warn">این فروشگاه بایگانی شده است؛ کلید API آن کار نمی‌کند.
+        <button class="btn tonal sm" data-act="merchantActive" data-id="${m.id}" data-active="1">فعال‌سازی دوباره</button></div>`}
+      <div class="grid g4" style="margin-bottom:16px">
+        <div class="stat"><b>${fa(m.stats.paid)}</b><span>تراکنش موفق</span></div>
+        <div class="stat"><b>${toman(m.stats.paid_sum)}</b><span>مجموع دریافتی</span></div>
+        <div class="stat"><b>${fa(m.stats.pending)}</b><span>در انتظار پرداخت</span></div>
+        <div class="stat"><b class="ltr">#${fa(m.id)}</b><span>شناسه فروشگاه</span></div>
+      </div>
+      <div class="grid g2">
+        <div class="card"><h2>کلید API</h2>
+          ${key ? `<div class="note">کلید جدید — فقط همین یک‌بار نمایش داده می‌شود:</div><div class="secret">${esc(key)}</div>
+            <button class="btn ghost sm" style="margin:8px 0" data-act="copy" data-text="${esc(key)}">کپی</button>`
+            : `<p class="small">${m.api_key_prefix ? `کلید فعلی: <code class="inline">${esc(m.api_key_prefix)}…</code>` : 'هنوز کلیدی ساخته نشده است.'}</p>`}
+          <button class="btn" data-act="rotateKey" data-id="${m.id}" data-has="${m.api_key_prefix ? 1 : 0}">${m.api_key_prefix ? 'ساخت کلید جدید (کلید قبلی باطل می‌شود)' : 'ساخت کلید API'}</button>
+<pre>import { Variz } from '@paychi/variz';
+const variz = new Variz({ apiKey: process.env.VARIZ_API_KEY, baseUrl: '${esc(base)}' });
+const tx = await variz.transactions.create({ amount: 1500000, order_id: 'INV-1' });</pre>
+        </div>
+        <div class="card"><h2>تنظیمات</h2>
+          <form data-form="merchantSettings" data-id="${m.id}">
+            <div class="field"><label>نام (در صفحه پرداخت نمایش داده می‌شود)</label><input name="name" required maxlength="80" value="${esc(m.name)}"></div>
+            <div class="field"><label>آدرس سایت (اختیاری)</label><input name="website" class="ltr" value="${esc(m.website || '')}"></div>
+            <div class="field"><label>آدرس وب‌هوک</label><input name="webhook_url" class="ltr" placeholder="https://example.com/webhooks/paychi" value="${esc(m.webhook_url || '')}"></div>
+            <div class="field"><label>مهلت پرداخت هر تراکنش (ثانیه، ${fa(defaults.tx_min_ttl_sec)} تا ${fa(defaults.tx_max_ttl_sec)}) — خالی = ${fa(defaults.tx_ttl_sec)}</label>
+              <input name="tx_ttl_sec" class="ltr" inputmode="numeric" value="${esc(m.tx_ttl_sec ?? '')}"></div>
+            <button class="btn">ذخیره</button>
+          </form>
+          <label style="margin-top:14px">کلید امضای وب‌هوک</label>
+          <div class="secret">${esc(m.webhook_secret)}</div>
+          <div class="row" style="margin-top:8px"><button class="btn ghost sm" data-act="copy" data-text="${esc(m.webhook_secret)}">کپی</button>
+            <button class="btn ghost sm" data-act="rotateSecret" data-id="${m.id}">تعویض کلید</button></div>
+        </div>
+      </div>
+      <div class="grid g2">
+        <div class="card"><h2>کارت‌های این فروشگاه</h2>
+          ${cards.length ? `<form data-form="merchantCards" data-id="${m.id}">
+            <label class="row" style="gap:8px;margin-bottom:6px"><input type="radio" name="mode" value="all" ${m.all_cards ? 'checked' : ''} style="width:auto">
+              همه کارت‌ها (کارت‌های جدید هم خودکار اضافه می‌شوند)</label>
+            <label class="row" style="gap:8px;margin-bottom:10px"><input type="radio" name="mode" value="some" ${m.all_cards ? '' : 'checked'} style="width:auto">
+              فقط کارت‌های انتخاب‌شده:</label>
+            ${cards.map((c) => `<label class="row small" style="gap:8px;margin:0 24px 6px 0">
+              <input type="checkbox" name="card_${c.id}" ${sel.has(c.id) && !m.all_cards ? 'checked' : ''} style="width:auto">
+              ${esc(c.bank_name)} <span class="ltr mono">•••• ${esc(last4(c.number))}</span> ${esc(c.holder_name || '')}
+              ${c.active ? '' : '<span class="badge cancelled">غیرفعال</span>'}</label>`).join('')}
+            <button class="btn tonal" style="margin-top:8px">ذخیره کارت‌ها</button>
+          </form>` : `<div class="empty">ابتدا در تب <a href="#cards">کارت‌ها</a> کارت ثبت کنید.</div>`}
+        </div>
+        <div class="card"><h2>تراکنش آزمایشی</h2>
+          <form data-form="testTx" class="row">
+            <input type="hidden" name="merchant_id" value="${m.id}">
+            <div class="field"><label>مبلغ (ریال)</label><input name="amount" class="ltr" inputmode="numeric" value="1500000" required></div>
+            <button class="btn">ساخت تراکنش</button>
+          </form>
+          ${state.flash.tx?.merchant?.id === m.id ? `<div class="note">مبلغ یکتا: <b>${rial(state.flash.tx.amount)}</b> —
+            <a href="${esc(state.flash.tx.payment_url)}" target="_blank" rel="noopener">باز کردن صفحه پرداخت</a></div>` : ''}
+        </div>
+      </div>
+      <div class="card"><h2>آخرین تراکنش‌ها</h2>
+        ${transactions.length ? `<div class="tablewrap"><table><tr><th>شناسه</th><th>مبلغ</th><th>سفارش</th><th>کارت</th><th>وضعیت</th><th>ایجاد</th></tr>
+          ${transactions.slice(0, 10).map((t) => `<tr><td class="ltr mono small"><a href="${esc(t.payment_url)}" target="_blank" rel="noopener">${esc(t.id)}</a></td>
+            <td class="nowrap">${rial(t.amount)}</td><td class="ltr small">${esc(t.order_id || '—')}</td>
+            <td class="small">${esc(t.card.bank_name)} <span class="ltr mono">${esc(last4(t.card.number))}</span></td>
+            <td>${badge(t.status)}</td><td class="nowrap small">${date(t.created_at)}</td></tr>`).join('')}</table></div>
+          ${transactions.length > 10 ? `<a class="btn ghost sm" style="margin-top:8px" data-act="txOfMerchant" data-id="${m.id}">همه تراکنش‌ها</a>` : ''}`
+          : `<div class="empty">تراکنشی وجود ندارد.</div>`}
+      </div>
+      <div class="card"><h2>آخرین ارسال‌های وب‌هوک</h2>${deliveriesTable(deliveries, { merchant: false })}</div>
+      <div class="card"><h2>حذف یا بایگانی</h2>
+        <p class="muted small">فروشگاهی که تراکنش دارد حذف نمی‌شود، فقط بایگانی می‌شود (کلید API آن باطل می‌شود و تاریخچه می‌ماند).</p>
+        <div class="row">
+          ${m.active ? `<button class="btn ghost sm" data-act="merchantActive" data-id="${m.id}" data-active="0">بایگانی</button>` : ''}
+          <button class="btn danger sm" data-act="deleteMerchant" data-id="${m.id}">حذف فروشگاه</button>
+        </div>
+      </div>`;
+  },
+
   async tx() {
     const f = state.txFilter;
-    const { transactions } = await api('GET', '/transactions' + (f ? `?status=${f}` : ''));
+    const qs = new URLSearchParams();
+    if (f) qs.set('status', f);
+    if (state.txMerchant) qs.set('merchant_id', state.txMerchant);
+    const { transactions } = await api('GET', '/transactions?' + qs);
     const opt = (v, l) => `<option value="${v}" ${f === v ? 'selected' : ''}>${l}</option>`;
-    return `${head('تراکنش‌ها', `<select data-change="txFilter" style="width:auto">${opt('', 'همه')}${opt('pending', 'در انتظار')}${opt('paid', 'پرداخت‌شده')}${opt('expired', 'منقضی')}${opt('cancelled', 'لغو شده')}</select>`)}
+    return `${head('تراکنش‌ها', `<select data-change="txMerchant" style="width:auto">${merchantOptions(state.txMerchant, { all: true })}</select>
+      <select data-change="txFilter" style="width:auto">${opt('', 'همه')}${opt('pending', 'در انتظار')}${opt('paid', 'پرداخت‌شده')}${opt('expired', 'منقضی')}${opt('cancelled', 'لغو شده')}</select>`)}
       <div class="card">${transactions.length ? `<div class="tablewrap"><table>
-        <tr><th>شناسه</th><th>مبلغ یکتا</th><th>مبلغ درخواستی</th><th>کارت</th><th>سفارش</th><th>وضعیت</th><th>ایجاد</th><th>انقضا</th></tr>
+        <tr><th>شناسه</th><th>فروشگاه</th><th>مبلغ یکتا</th><th>مبلغ درخواستی</th><th>کارت</th><th>سفارش</th><th>وضعیت</th><th>ایجاد</th><th>انقضا</th></tr>
         ${transactions.map((t) => `<tr>
           <td class="ltr mono small"><a href="${esc(t.payment_url)}" target="_blank" rel="noopener">${esc(t.id)}</a></td>
+          <td class="small">${t.merchant ? `<a href="#merchant/${t.merchant.id}">${esc(t.merchant.name)}</a>` : '—'}</td>
           <td class="nowrap"><b>${rial(t.amount)}</b></td><td class="nowrap muted">${rial(t.requested_amount)}</td>
           <td class="small">${esc(t.card.bank_name)}<br><span class="ltr mono">${esc(groupCard(t.card.number))}</span></td>
           <td class="ltr small">${esc(t.order_id || '—')}</td><td>${badge(t.status)}</td>
@@ -375,30 +518,10 @@ const views = {
   },
 
   async dev() {
-    const { settings, defaults, base_url: base } = state.me;
+    const { base_url: base } = state.me;
     const { deliveries } = await api('GET', '/webhooks');
-    const key = state.flash.apiKey;
-    return `${head('API و وب‌هوک')}
-      <div class="grid g2">
-        <div class="card"><h2>کلید API</h2>
-          ${key ? `<div class="note">کلید جدید — فقط همین یک‌بار نمایش داده می‌شود:</div><div class="secret">${esc(key)}</div>
-            <button class="btn ghost sm" style="margin:8px 0" data-act="copy" data-text="${esc(key)}">کپی</button>`
-            : `<p class="small">${settings.api_key_prefix ? `کلید فعلی: <code class="inline">${esc(settings.api_key_prefix)}…</code>` : 'هنوز کلیدی ساخته نشده است.'}</p>`}
-          <button class="btn" data-act="rotateKey">${settings.api_key_prefix ? 'ساخت کلید جدید (کلید قبلی باطل می‌شود)' : 'ساخت کلید API'}</button>
-        </div>
-        <div class="card"><h2>وب‌هوک و تنظیمات تراکنش</h2>
-          <form data-form="settings">
-            <div class="field"><label>آدرس وب‌هوک</label><input name="webhook_url" class="ltr" placeholder="https://example.com/webhooks/paychi" value="${esc(settings.webhook_url || '')}"></div>
-            <div class="field"><label>مهلت پرداخت هر تراکنش (ثانیه، ${fa(defaults.tx_min_ttl_sec)} تا ${fa(defaults.tx_max_ttl_sec)}) — خالی = ${fa(defaults.tx_ttl_sec)}</label>
-              <input name="tx_ttl_sec" class="ltr" inputmode="numeric" value="${esc(settings.tx_ttl_sec ?? '')}"></div>
-            <button class="btn">ذخیره</button>
-          </form>
-          <label style="margin-top:14px">کلید امضای وب‌هوک</label>
-          <div class="secret">${esc(settings.webhook_secret)}</div>
-          <div class="row" style="margin-top:8px"><button class="btn ghost sm" data-act="copy" data-text="${esc(settings.webhook_secret)}">کپی</button>
-            <button class="btn ghost sm" data-act="rotateSecret">تعویض کلید</button></div>
-        </div>
-      </div>
+    return `${head('API و مستندات')}
+      <div class="note">کلید API، وب‌هوک و مهلت پرداخت <b>برای هر فروشگاه جداست</b> — از تب <a href="#merchants">فروشگاه‌ها</a> تنظیم کنید.</div>
 
       <div class="card"><h2>توکن دستگاه (دستی)</h2>
         <p class="muted small">کاربران عادی در اپ با شماره موبایل و رمز وارد می‌شوند. اگر می‌خواهید شنونده خودتان را بنویسید
@@ -456,11 +579,7 @@ const valid = crypto.timingSafeEqual(Buffer.from(v1), Buffer.from(expected))
       </div>
 
       <div class="card"><h2>آخرین ارسال‌های وب‌هوک</h2>
-        ${deliveries.length ? `<div class="tablewrap"><table><tr><th>زمان</th><th>رویداد</th><th>تراکنش</th><th>آدرس</th><th>تلاش</th><th>وضعیت</th></tr>
-          ${deliveries.map((d) => `<tr><td class="nowrap small">${date(d.created_at)}</td><td class="ltr mono small">${esc(d.event)}</td>
-            <td class="ltr mono small">${esc(d.tx_id)}</td><td class="ltr small">${esc(d.url)}</td><td>${fa(d.attempts)}</td>
-            <td>${badge(d.status)} <span class="small muted ltr">${esc(d.last_error || d.last_code || '')}</span></td></tr>`).join('')}</table></div>`
-          : `<div class="empty">هنوز وب‌هوکی ارسال نشده است.</div>`}
+        ${deliveriesTable(deliveries)}
       </div>`;
   },
 };
@@ -523,21 +642,62 @@ const actions = {
     state.flash.deviceToken = (await api('POST', '/devices', { name: 'iPhone Shortcut', platform: 'ios' })).token;
     await reload();
   },
-  async rotateKey() {
-    if (state.me.settings.api_key_prefix && !confirm('کلید قبلی باطل می‌شود. ادامه می‌دهید؟')) return;
-    state.flash.apiKey = (await api('POST', '/api-key/rotate', {})).api_key;
+  async rotateKey(el) {
+    if (el.dataset.has === '1' && !confirm('کلید قبلی باطل می‌شود. ادامه می‌دهید؟')) return;
+    const { api_key: key } = await api('POST', `/merchants/${el.dataset.id}/api-key`, {});
+    state.flash.apiKey = { merchantId: Number(el.dataset.id), key };
     await reload();
   },
-  async rotateSecret() {
-    if (!confirm('کلید امضای وب‌هوک عوض شود؟')) return;
-    await api('POST', '/webhook-secret/rotate', {});
+  async rotateSecret(el) {
+    if (!confirm('کلید امضای وب‌هوک عوض شود؟ گیرنده وب‌هوک باید کلید جدید را بگیرد.')) return;
+    await api('POST', `/merchants/${el.dataset.id}/webhook-secret`, {});
     await reload();
+  },
+  async merchantActive(el) {
+    await api('PATCH', '/merchants/' + el.dataset.id, { active: el.dataset.active === '1' });
+    await reload();
+  },
+  async deleteMerchant(el) {
+    if (!confirm('این فروشگاه حذف شود؟ کلید API آن باطل می‌شود.')) return;
+    const r = await api('DELETE', '/merchants/' + el.dataset.id);
+    toast(r.archived ? 'فروشگاه تراکنش دارد؛ بایگانی شد' : 'فروشگاه حذف شد');
+    location.hash = 'merchants';
+    state.me = await api('GET', '/me');
+  },
+  async toggleArchived() {
+    state.showArchived = !state.showArchived;
+    await show('merchants');
+  },
+  async txOfMerchant(el) {
+    state.txMerchant = el.dataset.id;
+    location.hash = 'tx';
   },
 };
 
 const forms = {
   async testTx(d) {
-    state.flash.tx = await api('POST', '/transactions', { amount: numOrNull(d.amount) });
+    state.flash.tx = await api('POST', '/transactions', { amount: numOrNull(d.amount), merchant_id: numOrNull(d.merchant_id) });
+    await reload();
+  },
+  async createMerchant(d) {
+    const { merchant } = await api('POST', '/merchants', { name: d.name, website: d.website.trim() || null });
+    toast('فروشگاه ساخته شد');
+    state.me = await api('GET', '/me');
+    location.hash = 'merchant/' + merchant.id;
+  },
+  async merchantSettings(d, form) {
+    await api('PATCH', '/merchants/' + form.dataset.id, {
+      name: d.name, website: d.website.trim() || null,
+      webhook_url: d.webhook_url.trim() || null, tx_ttl_sec: numOrNull(d.tx_ttl_sec),
+    });
+    toast('ذخیره شد');
+    await reload();
+  },
+  async merchantCards(d, form) {
+    const ids = Object.keys(d).filter((k) => k.startsWith('card_')).map((k) => Number(k.slice(5)));
+    if (d.mode === 'some' && !ids.length) throw new Error('حداقل یک کارت انتخاب کنید');
+    await api('PATCH', '/merchants/' + form.dataset.id, { all_cards: d.mode === 'all', card_ids: d.mode === 'all' ? [] : ids });
+    toast('کارت‌های فروشگاه ذخیره شد');
     await reload();
   },
   async addCard(d) {
@@ -576,11 +736,6 @@ const forms = {
     state.flash.deviceToken = (await api('POST', '/devices', d)).token;
     await reload();
   },
-  async settings(d) {
-    await api('PATCH', '/settings', { webhook_url: d.webhook_url.trim() || null, tx_ttl_sec: numOrNull(d.tx_ttl_sec) });
-    toast('ذخیره شد');
-    await reload();
-  },
 };
 
 const guard = (fn) => async (...a) => {
@@ -616,6 +771,10 @@ document.addEventListener('change', guard(async (e) => {
     state.txFilter = e.target.value;
     await show('tx');
   }
+  if (e.target.dataset.change === 'txMerchant') {
+    state.txMerchant = e.target.value;
+    await show('tx');
+  }
 }));
 
 document.addEventListener('input', (e) => {
@@ -627,17 +786,21 @@ document.addEventListener('input', (e) => {
   $('#card-preview').innerHTML = bankCard(n, $('[data-holderinput]', form).value);
 });
 
-async function show(tab) {
-  if (!views[tab]) tab = 'overview';
-  state.tab = tab;
-  document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
-  const html = await views[tab]();
-  if (state.tab !== tab) return;
+async function show(route) {
+  // Routes: "tab" or "merchant/<id>".
+  let [tab, arg] = String(route).split('/');
+  if (!views[tab] || (tab === 'merchant' && !arg)) [tab, arg] = ['overview', undefined];
+  route = arg ? `${tab}/${arg}` : tab;
+  state.tab = route;
+  const navTab = tab === 'merchant' ? 'merchants' : tab;
+  document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === navTab));
+  const html = await views[tab](arg);
+  if (state.tab !== route) return;
   main.innerHTML = html;
-  if (tab !== 'overview') delete state.flash.tx;
+  if (tab !== 'overview' && tab !== 'merchant') delete state.flash.tx;
   if (tab !== 'listen' && tab !== 'dev') delete state.flash.deviceToken;
   watchForDevice((tab === 'overview' && state.me.counts.devices === 0) || tab === 'listen');
-  if (tab !== 'dev') delete state.flash.apiKey;
+  if (tab !== 'merchant') delete state.flash.apiKey;
 }
 
 window.addEventListener('hashchange', guard(() => show(location.hash.slice(1))));
@@ -645,5 +808,7 @@ window.addEventListener('hashchange', guard(() => show(location.hash.slice(1))))
 guard(async () => {
   [state.me, state.banks] = await Promise.all([api('GET', '/me'), api('GET', '/banks')]);
   $('#who').textContent = state.me.user.name || state.me.user.phone;
+  // Internal mode: no subscriptions, so no plan tab.
+  if (state.me.billing_mode === 'off') document.querySelectorAll('[data-tab="plan"]').forEach((b) => b.remove());
   await show(location.hash.slice(1) || 'overview');
 })();

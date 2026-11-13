@@ -51,7 +51,7 @@ npm install "github:<owner>/<repo>#main" --install-links
 import { Variz } from '@paychi/variz';
 
 const variz = new Variz({
-  apiKey: process.env.VARIZ_API_KEY,   // dashboard → API → "ساخت کلید API"
+  apiKey: process.env.VARIZ_API_KEY,   // dashboard → فروشگاه‌ها → (merchant) → "ساخت کلید API"
   baseUrl: process.env.VARIZ_URL,      // e.g. https://pay.example.com
 });
 
@@ -63,6 +63,22 @@ const tx = await variz.transactions.create({
 
 console.log(tx.payment_url);  // send the payer here, or show the details yourself:
 console.log(`Transfer exactly ${tx.amount} Rial to ${tx.card.number} (${tx.card.bank_name}) before ${tx.expires_at}`);
+```
+
+## Merchants
+
+One account can run many **merchants** (فروشگاه): a site, a Telegram bot, another app. Each
+merchant has its **own API key, webhook URL + secret, payment window and transactions**, and
+uses all of the account's cards or a chosen subset. Create them in dashboard → فروشگاه‌ها.
+
+The API key decides the merchant: everything you do with a key (create, list, get, cancel, cards)
+only sees that merchant's data. The listener phone and the cards are shared, so unique amounts
+are unique across all merchants of the account.
+
+```js
+const shop = new Variz({ apiKey: process.env.SHOP_KEY, baseUrl });
+const bot  = new Variz({ apiKey: process.env.BOT_KEY,  baseUrl });
+await bot.merchant.get();   // { id: 2, name: 'ربات تلگرام', website: null }
 ```
 
 ## How a payment works
@@ -103,6 +119,7 @@ Returns a `Transaction`:
   amount: 1500003,            // ← the payer must transfer exactly this
   requested_amount: 1500000,
   currency: 'IRR',
+  merchant: { id: 2, name: 'ربات تلگرام' },  // owner of the API key
   order_id: 'INV-1001',
   description: 'Pro plan',
   card: { id: 1, number: '6104…', bank: 'mellat', bank_name: 'بانک ملت', holder_name: '…' },
@@ -126,7 +143,8 @@ await variz.transactions.cancel('tx_k3m9…');                     // only while
 
 ## Webhooks
 
-Set the URL in dashboard → API → «آدرس وب‌هوک» (or per transaction with `callback_url`).
+Set the URL per merchant in dashboard → فروشگاه‌ها → (merchant) → «آدرس وب‌هوک» (or per transaction
+with `callback_url`). Each merchant has its own webhook secret.
 Paychi `POST`s JSON:
 
 ```json
@@ -216,11 +234,12 @@ try {
 
 | `code` | status | Meaning |
 |---|---|---|
-| `invalid_api_key` | 401 | Wrong or rotated key |
+| `invalid_api_key` | 401 | Wrong or rotated key, or the merchant was deleted / archived |
+| `merchant_inactive` | 403 | Merchant is archived |
 | `subscription_required` | 402 | No active plan |
 | `plan_limit_reached` | 402 | Plan's transaction quota used up |
 | `invalid_amount` | 400 | Not an integer ≥ 10,000 |
-| `no_active_card` / `card_not_found` | 422 | Add or activate a card |
+| `no_active_card` / `card_not_found` | 422 | Add or activate a card, or allow it for this merchant |
 | `card_limit_reached` | 422 | All eligible cards hit their daily limit |
 | `no_unique_amount` | 409 | Too many open transactions with that amount; retry shortly |
 | `not_found` | 404 | Unknown transaction id |
@@ -308,6 +327,7 @@ The SDK wraps these endpoints; use them directly from any language.
 | List | `GET /api/v1/transactions?order_id=&status=&limit=` | API key |
 | Cancel | `POST /api/v1/transactions/:id/cancel` | API key |
 | Cards | `GET /api/v1/cards` | API key |
+| Merchant | `GET /api/v1/merchant` | API key |
 | Pair device | `POST /api/device/pair` `{ code }` | none |
 | Device login | `POST /api/device/login` `{ phone, password }` | none |
 | Device config | `GET /api/device/config` | `Bearer dev_…` |
