@@ -51,11 +51,38 @@ async function assertAllowedTarget(url) {
   }
 }
 
+const VARIZA_EVENTS = {
+  'transaction.paid': 'payment.paid',
+  'transaction.expired': 'payment.expired',
+  'transaction.cancelled': 'payment.cancelled',
+};
+
+/** Body + signature headers in the merchant's chosen format. */
+function formatDelivery(d, merchant, secret) {
+  if (merchant?.webhook_format === 'variza') {
+    const { event, created_at: createdAt, data } = JSON.parse(d.payload);
+    const body = JSON.stringify({
+      event: VARIZA_EVENTS[event] ?? event,
+      slug: data.id,
+      amount: Math.floor(data.amount / 10), // Toman, like Variza
+      amount_rial: data.amount,
+      status: data.status,
+      attempt_code: String(d.id),
+      paid_at: data.paid_at,
+      created_at: createdAt,
+    });
+    return { body, headers: { 'x-webhook-signature': 'sha256=' + createHmac('sha256', secret).update(body).digest('hex') } };
+  }
+  const ts = Math.floor(Date.now() / 1000);
+  return { body: d.payload, headers: { 'x-paychi-signature': `t=${ts},v1=${sign(secret, ts, d.payload)}` } };
+}
+
 async function deliver(d) {
   // Signed with the merchant's secret at send time, so a rotated secret applies to retries too.
-  const secret = q('SELECT webhook_secret FROM merchants WHERE id = ?').get(d.merchant_id)?.webhook_secret
+  const merchant = q('SELECT webhook_secret, webhook_format FROM merchants WHERE id = ?').get(d.merchant_id);
+  const secret = merchant?.webhook_secret
     ?? q('SELECT webhook_secret FROM users WHERE id = ?').get(d.user_id)?.webhook_secret;
-  const ts = Math.floor(Date.now() / 1000);
+  const out = formatDelivery(d, merchant, secret);
   let code = null;
   let error = null;
   try {
@@ -69,9 +96,9 @@ async function deliver(d) {
         'user-agent': 'Paychi-Webhook/1',
         'x-paychi-event': d.event,
         'x-paychi-delivery': String(d.id),
-        'x-paychi-signature': `t=${ts},v1=${sign(secret, ts, d.payload)}`,
+        ...out.headers,
       },
-      body: d.payload,
+      body: out.body,
     });
     code = res.status;
     if (code < 200 || code >= 300) error = `HTTP ${code}`;

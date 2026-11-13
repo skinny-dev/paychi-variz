@@ -50,7 +50,9 @@ export function updateMerchant(userId, id, b = {}) {
     : b.tx_ttl_sec == null || b.tx_ttl_sec === '' ? null
     : positiveInt(b.tx_ttl_sec, 'tx_ttl_sec', { min: config.txMinTtlSec, max: config.txMaxTtlSec });
   return tx(() => {
-    q(`UPDATE merchants SET name = ?, website = ?, webhook_url = ?, tx_ttl_sec = ?, active = ?, all_cards = ?
+    const format = 'webhook_format' in b ? b.webhook_format : m.webhook_format;
+    if (!['paychi', 'variza'].includes(format)) throw new ApiError(400, 'invalid_webhook_format', 'فرمت وب‌هوک نامعتبر است');
+    q(`UPDATE merchants SET name = ?, website = ?, webhook_url = ?, tx_ttl_sec = ?, active = ?, all_cards = ?, webhook_format = ?
        WHERE id = ?`).run(
       'name' in b ? cleanName(b.name) : m.name,
       'website' in b ? httpUrl(b.website, 'website') : m.website,
@@ -58,6 +60,7 @@ export function updateMerchant(userId, id, b = {}) {
       ttl,
       'active' in b ? (b.active ? 1 : 0) : m.active,
       'all_cards' in b ? (b.all_cards ? 1 : 0) : m.all_cards,
+      format,
       m.id,
     );
     if (Array.isArray(b.card_ids)) {
@@ -112,6 +115,7 @@ export function dashMerchant(m) {
     api_key_prefix: m.api_key_prefix,
     webhook_url: m.webhook_url,
     webhook_secret: m.webhook_secret,
+    webhook_format: m.webhook_format || 'paychi',
     tx_ttl_sec: m.tx_ttl_sec,
     all_cards: !!m.all_cards,
     card_ids: merchantCards(m).map((c) => c.id),

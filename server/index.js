@@ -10,6 +10,7 @@ import dashboardRoutes from './routes/dashboard.js';
 import apiRoutes from './routes/api.js';
 import deviceRoutes from './routes/device.js';
 import payRoutes from './routes/pay.js';
+import compatRoutes from './routes/compat.js';
 import { expireTransactions } from './services/transactions.js';
 import { processDueWebhooks } from './services/webhooks.js';
 import { startTelegram, stopTelegram } from './services/telegram.js';
@@ -65,6 +66,7 @@ await app.register(dashboardRoutes, { prefix: '/api/dash' });
 await app.register(apiRoutes, { prefix: '/api/v1' });
 await app.register(deviceRoutes, { prefix: '/api/device' });
 await app.register(payRoutes, { prefix: '/api/pay' });
+await app.register(compatRoutes, { prefix: '/api/compat' });
 
 // Background workers.
 const tick = (fn, ms) =>

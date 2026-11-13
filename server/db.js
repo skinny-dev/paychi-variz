@@ -182,6 +182,10 @@ if (!hasColumn('webhook_deliveries', 'merchant_id')) {
   db.exec('ALTER TABLE webhook_deliveries ADD COLUMN merchant_id INTEGER');
 }
 db.exec('CREATE INDEX IF NOT EXISTS tx_merchant_created ON transactions (merchant_id, created_at)');
+// 'paychi' (default) or 'variza': Variza-compatible webhooks for software written for Variza.
+if (!hasColumn('merchants', 'webhook_format')) {
+  db.exec("ALTER TABLE merchants ADD COLUMN webhook_format TEXT NOT NULL DEFAULT 'paychi'");
+}
 // Accounts from before merchants existed: their API key, webhook and transactions become the
 // account's first merchant, so existing integrations keep working unchanged.
 for (const u of db.prepare(

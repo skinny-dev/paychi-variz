@@ -76,6 +76,16 @@ runs the end-to-end test (`test/e2e.mjs`) against a temporary database.
    create a device token in the "API" tab.
 8. **API key + webhook** – per merchant, in dashboard → فروشگاه‌ها; integrate.
 
+## Variza compatibility (Mirza bots and other Variza clients)
+
+Software already written for Variza can switch to Paychi without code changes:
+
+- API address: `<BASE_URL>/api/compat/variza/v1` (`POST /pay` with `{ amount (Toman), return_url, title, expires_in }`
+  → `{ slug, pay_url, amount, expires_at }`), API token: the merchant's `pk_live_…` key.
+- On the merchant's page set **فرمت وب‌هوک → سازگار با واریزا**: webhooks are then sent as
+  `{ event: "payment.paid", slug, amount (Toman) }` with `X-Webhook-Signature: sha256=<HMAC-SHA256(secret, body)>`;
+  the webhook secret is the merchant's secret.
+
 ## JavaScript SDK
 
 `sdk/` is a zero-dependency client (`@paychi/variz`, private) with TypeScript types:

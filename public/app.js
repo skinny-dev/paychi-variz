@@ -440,12 +440,18 @@ const views = {
 <pre>import { Variz } from '@paychi/variz';
 const variz = new Variz({ apiKey: process.env.VARIZ_API_KEY, baseUrl: '${esc(base)}' });
 const tx = await variz.transactions.create({ amount: 1500000, order_id: 'INV-1' });</pre>
+          <p class="small muted">نرم‌افزاری که برای واریزا نوشته شده (مثل ربات میرزا): آدرس API را
+            <code class="inline">${esc(base)}/api/compat/variza/v1/pay</code> بگذارید، همین کلید را به‌جای توکن واریزا،
+            و «فرمت وب‌هوک» را روی «سازگار با واریزا» قرار دهید.</p>
         </div>
         <div class="card"><h2>تنظیمات</h2>
           <form data-form="merchantSettings" data-id="${m.id}">
             <div class="field"><label>نام (در صفحه پرداخت نمایش داده می‌شود)</label><input name="name" required maxlength="80" value="${esc(m.name)}"></div>
             <div class="field"><label>آدرس سایت (اختیاری)</label><input name="website" class="ltr" value="${esc(m.website || '')}"></div>
             <div class="field"><label>آدرس وب‌هوک</label><input name="webhook_url" class="ltr" placeholder="https://example.com/webhooks/paychi" value="${esc(m.webhook_url || '')}"></div>
+            <div class="field"><label>فرمت وب‌هوک</label><select name="webhook_format">
+              <option value="paychi" ${m.webhook_format === 'variza' ? '' : 'selected'}>پی‌چی (پیش‌فرض)</option>
+              <option value="variza" ${m.webhook_format === 'variza' ? 'selected' : ''}>سازگار با واریزا (ربات‌های میرزا و…)</option></select></div>
             <div class="field"><label>مهلت پرداخت هر تراکنش (ثانیه، ${fa(defaults.tx_min_ttl_sec)} تا ${fa(defaults.tx_max_ttl_sec)}) — خالی = ${fa(defaults.tx_ttl_sec)}</label>
               <input name="tx_ttl_sec" class="ltr" inputmode="numeric" value="${esc(m.tx_ttl_sec ?? '')}"></div>
             <button class="btn">ذخیره</button>
@@ -791,6 +797,7 @@ const forms = {
     await api('PATCH', '/merchants/' + form.dataset.id, {
       name: d.name, website: d.website.trim() || null,
       webhook_url: d.webhook_url.trim() || null, tx_ttl_sec: numOrNull(d.tx_ttl_sec),
+      webhook_format: d.webhook_format,
     });
     toast('ذخیره شد');
     await reload();

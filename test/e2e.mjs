@@ -453,6 +453,37 @@ try {
   assert.equal((await call('POST', `/api/dash/telegram/${chans[0].id}/test`, {})).status, 200);
   assert.equal((await call('GET', `/api/dash/merchants/${shop.id}/links`)).json.links.find((l) => l.id === lk.id).paid, 1);
   ok('Telegram: one-tap connect, invalid / reused code rejected, payment alert with payer details');
+  // Variza compatibility: the exact request a Mirza bot sends (createPayVariza) and the exact
+  // checks its webhook handler does (payment/variza_webhook.php)
+  const mirza = (await call('POST', '/api/dash/merchants', { name: 'Mirza bot', webhook_url: `http://127.0.0.1:${HOOK_PORT}/mirza` })).json.merchant;
+  assert.equal((await call('PATCH', `/api/dash/merchants/${mirza.id}`, { webhook_format: 'nope' })).status, 400);
+  assert.equal((await call('PATCH', `/api/dash/merchants/${mirza.id}`, { webhook_format: 'variza' })).json.merchant.webhook_format, 'variza');
+  const mirzaKey = (await call('POST', `/api/dash/merchants/${mirza.id}/api-key`, {})).json.api_key;
+  r = await call('POST', '/api/compat/variza/v1/pay',
+    { amount: 150000, return_url: 'https://bot.example/payment/variza.php?order=ab12', title: 'Mirza order ab12', expires_in: '1h' },
+    { authorization: 'Bearer ' + mirzaKey, accept: 'application/json', cookie: '' });
+  assert.equal(r.status, 201);
+  const vz = r.json;
+  assert.match(vz.slug, /^tx_/);
+  assert.ok(vz.pay_url.endsWith('/pay/' + vz.slug));
+  assert.ok(vz.amount >= 150000 && vz.amount_rial >= 1_500_000);
+  const vzTx = (await call('GET', `/api/dash/transactions?merchant_id=${mirza.id}`)).json.transactions[0];
+  assert.equal(vzTx.id, vz.slug);
+  assert.ok(Math.abs(new Date(vzTx.expires_at) - new Date(vzTx.created_at) - 3600_000) < 2000); // "1h"
+  assert.equal((await call('POST', '/api/compat/variza/v1/pay', { amount: 150000 }, { authorization: 'Bearer nope', cookie: '' })).status, 401);
+  assert.equal((await call('POST', '/api/compat/variza/v1/pay', { amount: 50 }, { authorization: 'Bearer ' + mirzaKey, cookie: '' })).status, 400);
+  d = (await dev('POST', '/ingest', { type: 'sms', sender: '98200030', body: sms(vz.amount_rial) })).json;
+  assert.deepEqual([d.matched, d.transaction_id], [true, vz.slug]);
+  const vh = await waitFor(() => hooks.find((h) => h.body.includes(vz.slug) && h.headers['x-webhook-signature']));
+  // what variza_webhook.php does:
+  const provided = vh.headers['x-webhook-signature'].replace(/^sha256=/, '');
+  assert.equal(provided, createHmac('sha256', mirza.webhook_secret).update(vh.body).digest('hex'));
+  const vbody = JSON.parse(vh.body);
+  assert.equal(vbody.event, 'payment.paid');
+  assert.equal(vbody.slug, vz.slug);
+  assert.ok(vbody.amount >= 150000); // billed amount in Toman
+  assert.equal(vh.headers['x-paychi-signature'], undefined);
+  ok('Variza compatibility: Mirza bot request, Toman amounts, payment.paid webhook with sha256 signature');
   console.log(`\nAll ${passed} checks passed.`);
 } catch (e) {
   console.error('\nFAILED:', e);
