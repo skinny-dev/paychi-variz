@@ -34,6 +34,8 @@ npm test
 
 runs the end-to-end test (`test/e2e.mjs`) against a temporary database.
 
+**Deploying** (Docker, Runflare, VPS, ports, env, backups): see [DEPLOY.md](DEPLOY.md).
+
 ## User flow
 
 1. **Plan** – pick a subscription plan (`server/config.js`). With `BILLING_MODE=mock` it activates

@@ -80,7 +80,7 @@ function mePayload(user) {
     },
     base_url: config.baseUrl,
     billing_mode: config.billingMode,
-    apk_available: existsSync(apkPath),
+    apk_available: existsSync(apkPath) || Boolean(config.apkUrl),
   };
 }
 

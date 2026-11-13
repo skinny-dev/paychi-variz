@@ -1,0 +1,31 @@
+# For a VPS or local testing. Runflare builds the Dockerfile directly and does not use this file.
+#
+#   cp .env.production.example .env.production   # edit BASE_URL
+#   docker compose up -d --build
+#
+# Future services (web app, pay relay, Postgres) join the same "paychi" network and reach this
+# one at http://variz:3000 without exposing it publicly.
+
+services:
+  variz:
+    build: .
+    image: paychi-variz:latest
+    container_name: paychi-variz
+    restart: unless-stopped
+    env_file: .env.production
+    ports:
+      # Bound to localhost: put a TLS reverse proxy (Caddy / nginx) in front of it.
+      # Change to "3000:3000" to expose it directly (no HTTPS).
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - variz-data:/app/data
+    networks:
+      - paychi
+    stop_grace_period: 15s
+
+volumes:
+  variz-data:
+
+networks:
+  paychi:
+    name: paychi

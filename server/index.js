@@ -2,8 +2,9 @@ import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
 import { config } from './config.js';
-import { q } from './db.js';
+import { db, q } from './db.js';
 import { ApiError } from './util.js';
 import dashboardRoutes from './routes/dashboard.js';
 import apiRoutes from './routes/api.js';
@@ -11,6 +12,15 @@ import deviceRoutes from './routes/device.js';
 import payRoutes from './routes/pay.js';
 import { expireTransactions } from './services/transactions.js';
 import { processDueWebhooks } from './services/webhooks.js';
+
+if (config.production) {
+  if (!config.baseUrl.startsWith('https://')) {
+    console.warn(`WARNING: BASE_URL is ${config.baseUrl}. Use the public https:// address in production (payment links, QR, secure cookies).`);
+  }
+  if (config.billingMode === 'mock') {
+    console.warn('WARNING: BILLING_MODE=mock — any signed-up user gets a plan without paying.');
+  }
+}
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL || 'warn' }, trustProxy: true, bodyLimit: 64 * 1024 });
 
@@ -37,7 +47,17 @@ await app.register(fastifyStatic, { root: fileURLToPath(new URL('../public', imp
 app.get('/dashboard', (req, reply) => reply.sendFile('app.html'));
 app.get('/pay/:id', (req, reply) => reply.sendFile('pay.html'));
 app.get('/connect', (req, reply) => reply.sendFile('connect.html'));
-app.get('/healthz', async () => ({ ok: true }));
+app.get('/healthz', async () => {
+  q('SELECT 1').get();
+  return { ok: true };
+});
+// The APK is either inside public/downloads (served as a file) or hosted elsewhere (APK_URL).
+const apkFile = fileURLToPath(new URL('../public/downloads/paychi-listener.apk', import.meta.url));
+app.get('/downloads/paychi-listener.apk', (req, reply) => {
+  if (existsSync(apkFile)) return reply.sendFile('downloads/paychi-listener.apk');
+  if (config.apkUrl) return reply.redirect(config.apkUrl);
+  return reply.code(404).send({ error: { code: 'not_found', message: 'APK not available' } });
+});
 
 await app.register(dashboardRoutes, { prefix: '/api/dash' });
 await app.register(apiRoutes, { prefix: '/api/v1' });
@@ -60,5 +80,22 @@ tick(() => {
   q('DELETE FROM pairing_codes WHERE expires_at < ?').run(Date.now());
 }, 3600_000);
 
+// Graceful stop (docker stop / redeploy sends SIGTERM): finish open requests, close SQLite.
+let stopping = false;
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  process.on(signal, async () => {
+    if (stopping) return;
+    stopping = true;
+    const force = setTimeout(() => process.exit(1), 10_000).unref();
+    try {
+      await app.close();
+      db.close();
+    } finally {
+      clearTimeout(force);
+      process.exit(0);
+    }
+  });
+}
+
 await app.listen({ port: config.port, host: process.env.HOST || '0.0.0.0' });
-console.log(`Paychi listening on ${config.baseUrl}`);
+console.log(`Paychi listening on port ${config.port}, public address ${config.baseUrl}`);

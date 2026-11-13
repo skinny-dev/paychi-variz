@@ -18,6 +18,8 @@ export const config = {
   graceSec: int('GRACE_SEC', 60),
   amountCooldownSec: int('AMOUNT_COOLDOWN_SEC', 1800),
   minAmount: 10_000,
+  apkUrl: process.env.APK_URL || '',
+  production: process.env.NODE_ENV === 'production',
   allowPrivateWebhooks:
     process.env.ALLOW_PRIVATE_WEBHOOKS === '1' || process.env.NODE_ENV !== 'production',
 };

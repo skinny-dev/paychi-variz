@@ -57,8 +57,9 @@
   } else {
     open.remove();
   }
-  fetch('/downloads/paychi-listener.apk', { method: 'HEAD' })
-    .then((r) => { if (!r.ok) document.getElementById('apk').remove(); })
+  // 200 = APK on this server; redirect = hosted elsewhere (APK_URL).
+  fetch('/downloads/paychi-listener.apk', { method: 'HEAD', redirect: 'manual' })
+    .then((r) => { if (!r.ok && r.type !== 'opaqueredirect') document.getElementById('apk').remove(); })
     .catch(() => {});
 </script>
 </body>
