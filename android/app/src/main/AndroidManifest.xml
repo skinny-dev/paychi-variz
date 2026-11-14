@@ -32,6 +32,10 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".DevActivity"
+            android:exported="false" />
+
         <!-- QR scanner screen, usable in portrait. The camera is only used here. -->
         <activity
             android:name=".ScanActivity"

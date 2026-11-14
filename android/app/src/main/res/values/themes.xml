@@ -17,6 +17,10 @@
     <color name="md_outline">#6F7977</color>
     <color name="md_outline_variant">#BEC9C6</color>
     <color name="md_error">#BA1A1A</color>
+    <color name="log_success">#2E7D32</color>
+    <color name="log_error">#C62828</color>
+    <color name="log_warn">#B26A00</color>
+    <color name="log_info">#1565C0</color>
 
     <style name="Theme.Paychi" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/md_primary</item>

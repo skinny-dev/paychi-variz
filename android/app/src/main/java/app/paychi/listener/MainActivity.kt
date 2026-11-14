@@ -116,6 +116,7 @@ class MainActivity : AppCompatActivity() {
         v<MaterialButton>(R.id.logout).setOnClickListener {
             Forwarder.logout(this) { runOnUiThread { refresh() } }
         }
+        v<MaterialButton>(R.id.openDev).setOnClickListener { startActivity(Intent(this, DevActivity::class.java)) }
         v<MaterialButton>(R.id.setupAll).setOnClickListener { advanceSetup() }
         v<MaterialButton>(R.id.grantSms).setOnClickListener { askSms() }
         v<MaterialButton>(R.id.grantNotif).setOnClickListener { openNotifAccess() }
@@ -355,6 +356,8 @@ class MainActivity : AppCompatActivity() {
             else getString(R.string.sources_line, Store.smsSenders(this).size, Store.packages(this).size),
             getString(R.string.queue_line, Store.queue(this).length()),
             Store.lastStatus(this).ifEmpty { null },
+            EventLog.all(this).firstOrNull()?.let { "آخرین رویداد: ${it.title}" },
+            if (EventLog.isLocalServer(Store.serverUrl(this))) "⚠ سرور محلی است؛ برای استفاده واقعی با QR سایت اصلی وصل شوید" else null,
         ).joinToString("\n")
     }
 }

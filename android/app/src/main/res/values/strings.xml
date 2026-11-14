@@ -56,5 +56,20 @@
     <string name="sources_all">پیامک و اعلان‌ها: همه فرستنده‌های بانکی</string>
     <string name="sources_line">محدود به: %1$d سرشماره پیامک، %2$d اپلیکیشن</string>
     <string name="queue_line">در صف ارسال: %1$d پیام</string>
-    <string name="privacy_note">فقط پیام‌هایی که شبیه واریز بانکی هستند به سرور ارسال می‌شوند. برنامه در پس‌زمینه کاری انجام نمی‌دهد و فقط وقتی پیامک یا اعلان تازه برسد بیدار می‌شود؛ نیازی به خاموش کردن بهینه‌سازی باتری نیست.</string>
+    <string name="privacy_note">فقط پیام‌هایی که شبیه واریز بانکی هستند به سرور ارسال می‌شوند. برنامه در پس‌زمینه کاری انجام نمی‌دهد و فقط وقتی پیامک یا اعلان تازه برسد بیدار می‌شود؛ در بیشتر گوشی‌ها نیازی به خاموش کردن بهینه‌سازی باتری نیست؛ در شیائومی و هواوی «اجرای خودکار» برنامه را روشن کنید.</string>
+    <string name="dev_open">توسعه و لاگ‌ها</string>
+    <string name="dev_title">توسعه و لاگ‌ها</string>
+    <string name="dev_ping">تست اتصال</string>
+    <string name="dev_flush">ارسال صف</string>
+    <string name="dev_copy">کپی همه</string>
+    <string name="dev_clear">پاک کردن</string>
+    <string name="dev_copied">کپی شد</string>
+    <string name="dev_clear_confirm">همه لاگ‌ها پاک شوند؟</string>
+    <string name="dev_f_all">همه</string>
+    <string name="dev_f_success">موفق</string>
+    <string name="dev_f_error">خطا</string>
+    <string name="dev_f_warn">هشدار</string>
+    <string name="dev_f_info">اطلاعات</string>
+    <string name="dev_empty">هنوز رویدادی ثبت نشده. یک پیامک واریز بفرستید یا «تست اتصال» را بزنید.</string>
+    <string name="dev_note">لاگ‌ها فقط روی همین گوشی می‌مانند (۳۰۰ رویداد آخر) و به جایی ارسال نمی‌شوند. متن پیامک‌های نادیده‌گرفته‌شده ثبت نمی‌شود. برای کپی یک رویداد، رویش نگه دارید.</string>
 </resources>

@@ -22,8 +22,18 @@ class SmsReceiver : BroadcastReceiver() {
             bySender.getOrPut(sender) { StringBuilder() }.append(msg.displayMessageBody ?: "")
         }
         val matches = bySender.filter { (sender, body) ->
-            if (allowed.isNotEmpty()) sender.lowercase() in allowed
-            else !Filter.isMobileNumber(sender) && Filter.looksLikeDeposit(body.toString())
+            val text = body.toString()
+            // Why a message stays on the phone (the text of ignored messages is never logged).
+            val skip = when {
+                allowed.isNotEmpty() && sender.lowercase() !in allowed -> "فرستنده در لیست فرستنده‌های مجاز داشبورد نیست"
+                allowed.isNotEmpty() -> null
+                Filter.isMobileNumber(sender) -> "فرستنده شماره موبایل است (بانک‌ها از سرشماره پیامک می‌دهند)"
+                !Filter.looksLikeDeposit(text) -> "شبیه پیامک واریز نبود (کلمه «واریز» یا مبلغ با + ندارد)"
+                else -> null
+            }
+            if (skip != null) EventLog.info(context, "پیامک نادیده گرفته شد", "از: $sender\nدلیل: $skip")
+            else EventLog.info(context, "پیامک بانکی دریافت شد — در حال ارسال", "از: $sender\n" + text.take(300))
+            skip == null
         }
         if (matches.isEmpty()) return
 

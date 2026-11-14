@@ -16,4 +16,8 @@
     <color name="md_outline">#899391</color>
     <color name="md_outline_variant">#3F4947</color>
     <color name="md_error">#FFB4AB</color>
+    <color name="log_success">#81C784</color>
+    <color name="log_error">#EF9A9A</color>
+    <color name="log_warn">#FFCC80</color>
+    <color name="log_info">#90CAF9</color>
 </resources>

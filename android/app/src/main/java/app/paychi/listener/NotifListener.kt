@@ -32,6 +32,11 @@ class NotifListener : NotificationListenerService() {
 
     override fun onListenerConnected() {
         smsApp = Telephony.Sms.getDefaultSmsPackage(this)
+        EventLog.info(this, "شنونده اعلان‌ها فعال شد")
+    }
+
+    override fun onListenerDisconnected() {
+        EventLog.warn(this, "شنونده اعلان‌ها قطع شد", "سیستم دسترسی اعلان را گرفت یا برنامه را بست؛ با باز کردن برنامه دوباره وصل می‌شود.")
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
@@ -60,6 +65,7 @@ class NotifListener : NotificationListenerService() {
             if (lastSeen[sbn.key] == body.hashCode()) return
             lastSeen[sbn.key] = body.hashCode()
         }
+        EventLog.info(this, "اعلان بانکی دریافت شد — در حال ارسال", "از برنامه: $pkg\n" + body.take(300))
         Forwarder.submit(this, "notification", pkg, body)
     }
 }

@@ -111,26 +111,124 @@ object Forwarder {
         if (url.isEmpty() || token.isEmpty()) return false
         val q = Store.queue(app)
         var retry = false
+        if (q.length() > 0 && fromJob) EventLog.info(app, "تلاش دوباره برای ارسال صف", "${q.length()} پیام در صف")
         while (q.length() > 0) {
-            val code = try {
-                request("POST", "$url/api/device/ingest", token, q.getJSONObject(0).toString()).first
+            val item = q.getJSONObject(0)
+            val started = System.currentTimeMillis()
+            val (code, text) = try {
+                request("POST", "$url/api/device/ingest", token, item.toString())
             } catch (e: Exception) {
                 Store.setStatus(app, "خطای شبکه: ${e.message}")
-                -1
+                EventLog.error(
+                    app, "خطای اتصال به سرور",
+                    "${e.javaClass.simpleName}: ${e.message}\nسرور: $url\nپیام در صف می‌ماند و وقتی اینترنت وصل شد دوباره ارسال می‌شود." +
+                        if (EventLog.isLocalServer(url)) "\n⚠ این آدرس محلی است و از بیرون شبکه در دسترس نیست." else "",
+                )
+                -1 to ""
             }
+            val ms = System.currentTimeMillis() - started
             // 2xx: delivered. 4xx (except 401/429): the server rejected it for good — drop it.
             val drop = code in 200..299 || (code in 400..499 && code != 401 && code != 429)
             if (!drop) {
-                if (code > 0) Store.setStatus(app, "خطای سرور: $code")
+                if (code > 0) {
+                    Store.setStatus(app, "خطای سرور: $code")
+                    if (code == 401) EventLog.error(app, "اتصال قطع است — دستگاه نامعتبر (401)", "این دستگاه از داشبورد حذف شده یا توکنش باطل شده. خارج شوید و دوباره QR را اسکن کنید.")
+                    else EventLog.warn(app, "خطای سرور ($code) — بعداً دوباره ارسال می‌شود", errorMessage(text, code))
+                }
                 retry = code != 401 // 401 needs the user to reconnect, retrying cannot help
                 break
             }
             q.remove(0)
             Store.setQueue(app, q)
-            if (code in 200..299) Store.setStatus(app, "آخرین ارسال موفق: " + java.util.Date())
+            if (code in 200..299) {
+                Store.setStatus(app, "آخرین ارسال موفق: " + java.util.Date())
+                logVerdict(app, item, text, ms)
+            } else {
+                EventLog.error(app, "سرور پیام را رد کرد (HTTP $code)", errorMessage(text, code) + "\n" + source(item))
+            }
         }
         if (retry && !fromJob) FlushJob.schedule(app)
         return retry
+    }
+
+    private fun source(item: JSONObject) =
+        (if (item.optString("type") == "notification") "اعلان از: " else "پیامک از: ") + item.optString("sender")
+
+    /** Turn the server's answer to /ingest into a readable log line. */
+    private fun logVerdict(app: Context, item: JSONObject, text: String, ms: Long) {
+        val json = try { JSONObject(text) } catch (_: Exception) { JSONObject() }
+        val amount = json.optLong("amount", 0)
+        val lines = mutableListOf<String>()
+        if (amount > 0) lines += "مبلغ خوانده‌شده: ${EventLog.money(amount)} ریال (${EventLog.money(amount / 10)} تومان)"
+        json.optString("transaction_id").takeIf { it.isNotEmpty() }?.let { lines += "تراکنش: $it" }
+        json.optString("bank").takeIf { it.isNotEmpty() && it != "null" }?.let { lines += "بانک: $it" }
+        lines += source(item)
+        lines += "زمان پاسخ سرور: $ms ms"
+
+        if (json.optBoolean("matched")) {
+            EventLog.success(app, "واریز موفق — تراکنش تأیید شد ✓", lines.joinToString("\n"))
+            return
+        }
+        if (json.optBoolean("duplicate")) {
+            EventLog.info(app, "پیام تکراری — قبلاً ثبت شده بود", lines.joinToString("\n"))
+            return
+        }
+        val reason = json.optString("reason")
+        val (level, title, hint) = when (reason) {
+            "no_pending_transaction" -> Triple(
+                EventLog.Level.ERROR, "واریز ناموفق — تراکنش منتظری با این مبلغ نیست",
+                "مبلغ باید دقیقاً همان مبلغ فاکتور باشد (با رقم‌های آخرش). شاید فاکتور منقضی شده، قبلاً پرداخت شده، یا روی سرور/حساب دیگری ساخته شده.",
+            )
+            "card_mismatch" -> Triple(
+                EventLog.Level.ERROR, "واریز ناموفق — به کارت دیگری واریز شده",
+                "مبلغ با یک فاکتور جور بود ولی پیام مال کارت دیگری است.",
+            )
+            "bank_mismatch" -> Triple(
+                EventLog.Level.ERROR, "واریز ناموفق — بانک پیام با کارت فاکتور جور نیست",
+                "بانک کارت را در داشبورد چک کنید.",
+            )
+            "not_a_deposit" -> Triple(
+                EventLog.Level.WARN, "سرور این پیام را واریز تشخیص نداد",
+                "اگر واقعاً واریز بوده، متن پیامک را برای پشتیبانی بفرستید تا قالب بانک اضافه شود.",
+            )
+            "sender_is_mobile_number" -> Triple(
+                EventLog.Level.WARN, "رد شد — فرستنده شماره موبایل است",
+                "پیامک واریز باید از سرشماره بانک بیاید، نه از یک شماره موبایل.",
+            )
+            "source_not_allowed" -> Triple(
+                EventLog.Level.WARN, "رد شد — فرستنده در لیست مجاز نیست",
+                "در داشبورد، بخش منابع، این فرستنده را اضافه کنید.",
+            )
+            else -> Triple(EventLog.Level.WARN, "پیام ثبت شد ولی تطبیق نخورد", "")
+        }
+        if (hint.isNotEmpty()) lines += "راهنما: $hint"
+        if (reason.isNotEmpty()) lines += "کد: $reason"
+        EventLog.add(app, level, title, lines.joinToString("\n"))
+    }
+
+    /** Developer screen: is the server reachable and does it accept this device's token? */
+    fun ping(ctx: Context, done: () -> Unit) {
+        val app = ctx.applicationContext
+        io.execute {
+            val url = Store.serverUrl(app)
+            val started = System.currentTimeMillis()
+            try {
+                val (code, text) = request("GET", "$url/api/device/config", Store.token(app), null)
+                val ms = System.currentTimeMillis() - started
+                when (code) {
+                    200 -> EventLog.success(app, "اتصال به سرور سالم است", "سرور: $url\nزمان پاسخ: $ms ms")
+                    401 -> EventLog.error(app, "سرور در دسترس است ولی دستگاه نامعتبر است (401)", "دوباره QR را اسکن کنید.\nسرور: $url")
+                    else -> EventLog.error(app, "تست اتصال: HTTP $code", errorMessage(text, code) + "\nسرور: $url")
+                }
+            } catch (e: Exception) {
+                EventLog.error(
+                    app, "سرور در دسترس نیست",
+                    "${e.javaClass.simpleName}: ${e.message}\nسرور: $url" +
+                        if (EventLog.isLocalServer(url)) "\n⚠ این آدرس محلی است و از بیرون شبکه در دسترس نیست." else "",
+                )
+            }
+            done()
+        }
     }
 
     /** Sign in with the account's phone + password; the server creates this device and returns its token. */
@@ -151,12 +249,15 @@ object Forwarder {
                     val acc = json.getJSONObject("account")
                     val name = acc.optString("name").ifEmpty { acc.optString("phone") }
                     Store.save(app, base, json.getString("token"), name)
+                    logConnected(app, "ورود با شماره و رمز", base, name)
                     syncLocked(app)
                     cb(true, name)
                 } else {
+                    EventLog.error(app, "ورود ناموفق", errorMessage(text, code) + "\nسرور: $base")
                     cb(false, errorMessage(text, code))
                 }
             } catch (e: Exception) {
+                EventLog.error(app, "ورود ناموفق — سرور در دسترس نیست", "${e.message}\nسرور: $base")
                 cb(false, e.message ?: "error")
             }
         }
@@ -180,12 +281,15 @@ object Forwarder {
                     val name = acc.optString("name").ifEmpty { acc.optString("phone") }
                     Store.signOut(app)
                     Store.save(app, base, json.getString("token"), name)
+                    logConnected(app, "اتصال با QR", base, name)
                     syncLocked(app)
                     cb(true, name)
                 } else {
+                    EventLog.error(app, "اتصال با QR ناموفق", errorMessage(text, status) + "\nسرور: $base")
                     cb(false, errorMessage(text, status))
                 }
             } catch (e: Exception) {
+                EventLog.error(app, "اتصال با QR ناموفق — سرور در دسترس نیست", "${e.message}\nسرور: $base")
                 cb(false, e.message ?: "error")
             }
         }
@@ -202,12 +306,15 @@ object Forwarder {
                     val acc = JSONObject(text).optJSONObject("account")
                     val name = acc?.optString("name")?.ifEmpty { acc.optString("phone") } ?: ""
                     Store.save(app, base, token, name)
+                    logConnected(app, "اتصال با توکن", base, name)
                     syncLocked(app)
                     cb(true, name)
                 } else {
+                    EventLog.error(app, "اتصال با توکن ناموفق", errorMessage(text, code))
                     cb(false, errorMessage(text, code))
                 }
             } catch (e: Exception) {
+                EventLog.error(app, "اتصال با توکن ناموفق — سرور در دسترس نیست", e.message ?: "")
                 cb(false, e.message ?: "error")
             }
         }
@@ -221,7 +328,9 @@ object Forwarder {
                 request("POST", Store.serverUrl(app) + "/api/device/logout", Store.token(app), "{}")
             } catch (_: Exception) {
             }
+            val dropped = Store.queue(app).length()
             Store.signOut(app)
+            EventLog.info(app, "خروج از حساب", if (dropped > 0) "$dropped پیامِ ارسال‌نشده از صف حذف شد" else "")
             cb()
         }
     }
@@ -232,7 +341,8 @@ object Forwarder {
         io.execute {
             try {
                 syncLocked(app)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                EventLog.warn(app, "همگام‌سازی تنظیمات ناموفق", "${e.message}\nسرور: ${Store.serverUrl(app)}")
             }
             cb?.invoke()
         }
@@ -240,11 +350,22 @@ object Forwarder {
 
     private fun syncLocked(app: Context) {
         val (code, text) = request("GET", Store.serverUrl(app) + "/api/device/config", Store.token(app), null)
-        if (code != 200) return
+        if (code != 200) {
+            EventLog.warn(app, "همگام‌سازی تنظیمات ناموفق (HTTP $code)", errorMessage(text, code))
+            return
+        }
         val json = JSONObject(text)
         Store.saveSources(app, json.getJSONArray("sms_senders").toSet(), json.getJSONArray("notification_packages").toSet())
         Store.setLastSync(app)
         flushLocked(app)
+    }
+
+    private fun logConnected(app: Context, how: String, base: String, name: String) {
+        EventLog.success(
+            app, "متصل شد — $how",
+            "حساب: $name\nسرور: $base" +
+                if (EventLog.isLocalServer(base)) "\n⚠ این آدرس محلی (سرور توسعه) است؛ گوشی فقط روی همان شبکه به آن می‌رسد." else "",
+        )
     }
 
     private fun errorMessage(text: String, code: Int): String =
